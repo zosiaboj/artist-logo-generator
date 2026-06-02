@@ -1,5 +1,5 @@
 import os, base64, requests
-from PIL import Image, ImageOps, ImageDraw, ImageFont, ImageEnhance, ImageChops
+from PIL import Image, ImageOps, ImageDraw, ImageFont, ImageEnhance
 from io import BytesIO
 
 FONT_DIR = '/app/fonts'
@@ -37,27 +37,33 @@ def apply_transforms(img, apply_default_size=True, invert=False, make_white=Fals
         else:
             new_size = zoomed_size
 
-    if new_size[0] > 0 and new_size[1] > 0:
-        img = img.resize(new_size, Image.Resampling.LANCZOS)
-    
-    final = Image.new('RGB', (canvas_side, canvas_side), (0, 0, 0))
-    final.paste(img, ((canvas_side - img.width) // 2, (canvas_side - img.height) // 2), img)
-
-    # Apply server-side tinting if requested. `tint` expected as a hex string like '#RRGGBB'.
+    # Apply tint while the image still has RGBA alpha, matching the CSS mask-image
+    # overlay the frontend uses: tint colour shows wherever the logo is opaque.
     if tint:
         try:
             h = str(tint).lstrip('#')
             if len(h) == 3:
                 h = ''.join([c*2 for c in h])
             if len(h) == 6:
-                r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-                tint_img = Image.new('RGB', final.size, (r, g, b))
-                # Multiply and blend to approximate the frontend multiply overlay
-                multiplied = ImageChops.multiply(final, tint_img)
-                final = Image.blend(final, multiplied, alpha=0.6)
+                r_t, g_t, b_t = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+                alpha_ch = img.getchannel('A')
+                # Use alpha channel as mask for PNGs with transparency; fall back to
+                # luminance for fully-opaque sources (JPEGs, uploaded images).
+                if alpha_ch.getextrema()[0] < 255:
+                    mask = alpha_ch.point(lambda x: int(x * 0.9))
+                else:
+                    mask = img.convert('L').point(lambda x: int(x * 0.9))
+                tint_layer = Image.new('RGBA', img.size, (r_t, g_t, b_t, 0))
+                tint_layer.putalpha(mask)
+                img = Image.alpha_composite(img, tint_layer)
         except Exception:
-            # If parsing fails, silently ignore tint
             pass
+
+    if new_size[0] > 0 and new_size[1] > 0:
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+    final = Image.new('RGB', (canvas_side, canvas_side), (0, 0, 0))
+    final.paste(img, ((canvas_side - img.width) // 2, (canvas_side - img.height) // 2), img)
 
     return final
 
