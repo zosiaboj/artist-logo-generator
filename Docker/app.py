@@ -52,24 +52,24 @@ def download_font_if_needed(font_name):
     print(f"Font '{font_name}' not found locally. Attempting to download from Google Fonts...")
 
     try:
-        css_url = f"https://fonts.googleapis.com/css2?family={font_name.replace(' ', '+')}:wght@400&display=swap"
+        # Use Fonts API v1 with subset=latin,latin-ext so the server returns a single font
+        # file covering both ranges. An old Android UA makes Google return TTF (not woff2
+        # split-by-unicode-range), giving us one file with all needed glyphs including
+        # Polish ł, ó, ą, ę etc.
+        css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}:regular&subset=latin,latin-ext"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Linux; U; Android 2.2; en-us; Nexus One Build/FRF91) AppleWebKit/533.1 (KHTML, like Gecko) Version/4.0 Mobile Safari/533.1'
         }
         css_response = requests.get(css_url, headers=headers)
         css_response.raise_for_status()
         css_text = css_response.text
 
-        # Find all font URLs
-        font_urls = re.findall(r"url\((http.*?)\)", css_text)
+        font_urls = re.findall(r"url\(([^)]+)\)", css_text)
         if not font_urls:
             print(f"Could not find any font URL in the CSS for '{font_name}'.")
             return None
 
-        # Prefer ttf, but take what we can get. Let's try to find a URL for the 'latin' subset if possible.
-        # This is tricky because there are multiple font-face declarations.
-        # For simplicity, let's just take the last URL, which is often the one for the basic latin set.
-        font_url = font_urls[-1]
+        font_url = font_urls[0]
 
         # Determine file extension
         extension = ".ttf" # default
@@ -105,6 +105,13 @@ def get_options(rating_key):
     artist = plex_utils.fetch_artist(rating_key)
     logos = plex_utils.get_fanart_logos(artist)
     return jsonify({"logos": logos, "google_url": f"https://www.google.com/search?q={artist.title}+transparent+logo+png&tbm=isch"})
+
+
+@app.route('/get_metal_archives/<rating_key>')
+def get_metal_archives(rating_key):
+    artist = plex_utils.fetch_artist(rating_key)
+    logos = plex_utils.get_metal_archives_logos(artist)
+    return jsonify({"logos": logos})
 
 
 @app.route('/get_posters/<rating_key>')
