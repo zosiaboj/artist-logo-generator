@@ -94,7 +94,10 @@ def get_cjk_font_for_text(text):
                f"&text={quote(cjk_chars)}")
     try:
         css = requests.get(css_url, headers={"User-Agent": _MODERN_UA}, timeout=15).text
-        woff2_urls = re.findall(r'url\(([^)]+\.woff2[^)]*)\)', css)
+        # Match either .woff2 extension or format('woff2') annotation
+        woff2_urls = re.findall(r"url\(([^)]+)\)\s*format\(['\"]woff2['\"]\)", css)
+        if not woff2_urls:
+            woff2_urls = re.findall(r'url\(([^)]+\.woff2[^)]*)\)', css)
         if not woff2_urls:
             print(f"No woff2 URL for CJK chars {cjk_chars!r}")
             return None
