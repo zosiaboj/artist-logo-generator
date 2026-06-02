@@ -13,6 +13,8 @@ let selectedArtists = new Set();
 let lastSelectedArtist = null;
 let fanartLogos = [];
 let fanartPage = 1;
+let maLogos = [];
+let maPage = 1;
 let currentStatusFilter = 'all';
 let lightboxImages = [];
 let lightboxIndex = 0;
@@ -351,6 +353,34 @@ async function loadArtist(key, name) {
   fanartLogos = data.logos;
   fanartPage = 1;
   renderFanartPage();
+
+  // Fetch Metal Archives logos asynchronously (HEAD-probing can be slow)
+  maLogos = [];
+  maPage = 1;
+  renderMAPage();
+  const maBtn = document.getElementById('ma-tab-btn');
+  function setMABtnUnavailable() {
+    if (!maBtn) return;
+    maBtn.style.opacity = '0.35';
+    maBtn.style.pointerEvents = 'none';
+    maBtn.style.cursor = 'not-allowed';
+  }
+  function setMABtnAvailable() {
+    if (!maBtn) return;
+    maBtn.style.opacity = '';
+    maBtn.style.pointerEvents = '';
+    maBtn.style.cursor = '';
+  }
+  setMABtnUnavailable();
+  fetch(`/get_metal_archives/${key}`)
+    .then(r => r.json())
+    .then(d => {
+      maLogos = d.logos || [];
+      maPage = 1;
+      renderMAPage();
+      if (maLogos.length > 0) setMABtnAvailable(); else setMABtnUnavailable();
+    })
+    .catch(() => setMABtnUnavailable());
   
   // Close sidebar on mobile after selection
     if (window.innerWidth <= 800) {
@@ -444,6 +474,75 @@ function renderFanartPage() {
   };
 }
 
+function renderMAPage() {
+  const grid = document.getElementById("ma-grid");
+  const paginationControls = document.getElementById("ma-pagination");
+  if (!grid || !paginationControls) return;
+  while (grid.firstChild) grid.removeChild(grid.firstChild);
+  while (paginationControls.firstChild) paginationControls.removeChild(paginationControls.firstChild);
+
+  if (!maLogos.length) {
+    const msg = document.createElement('p');
+    msg.style.cssText = 'opacity:0.5; font-size:13px; padding:10px;';
+    msg.textContent = 'No logos found on Metal Archives.';
+    grid.appendChild(msg);
+    return;
+  }
+
+  const w = window.innerWidth;
+  let cols = 3, rows = 3;
+  if (w >= 700) { cols = 3; rows = 3; }
+  else if (w >= 500) { cols = 2; rows = 2; }
+  else { cols = 1; rows = 1; }
+  const pageSize = Math.min(9, cols * rows);
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+  const logosToShow = maLogos.slice((maPage - 1) * pageSize, maPage * pageSize);
+  logosToShow.forEach(u => {
+    const img = document.createElement("img");
+    const proxy = `/proxy_image?url=${encodeURIComponent(u)}`;
+    img.src = proxy;
+    img.className = "logo-option";
+    img.onclick = () => {
+      selectedUrl = u;
+      document.getElementById("preview-img").src = proxy;
+      resetFilters();
+    };
+    grid.appendChild(img);
+  });
+
+  const totalPages = Math.max(1, Math.ceil(maLogos.length / pageSize));
+  const prevButton = document.createElement('button');
+  prevButton.className = 'pagination-btn';
+  prevButton.textContent = '<';
+  prevButton.disabled = maPage <= 1;
+  prevButton.onclick = () => { if (maPage > 1) { maPage--; renderMAPage(); } };
+
+  const pageIndicator = document.createElement('span');
+  pageIndicator.textContent = `Page ${maPage} of ${totalPages}`;
+
+  const nextButton = document.createElement('button');
+  nextButton.className = 'pagination-btn';
+  nextButton.textContent = '>';
+  nextButton.disabled = maPage >= totalPages;
+  nextButton.onclick = () => { if (maPage < totalPages) { maPage++; renderMAPage(); } };
+
+  paginationControls.appendChild(prevButton);
+  paginationControls.appendChild(pageIndicator);
+  paginationControls.appendChild(nextButton);
+
+  let touchStartX = null;
+  const threshold = 40;
+  grid.ontouchstart = (e) => { touchStartX = e.changedTouches[0].clientX; };
+  grid.ontouchend = (e) => {
+    if (touchStartX === null) return;
+    const diff = e.changedTouches[0].clientX - touchStartX;
+    if (diff > threshold && maPage > 1) { maPage--; renderMAPage(); }
+    else if (diff < -threshold && maPage < totalPages) { maPage++; renderMAPage(); }
+    touchStartX = null;
+  };
+}
+
 // --- EDITOR LOGIC ---
 
 function toggleSection(sectionId) {
@@ -458,33 +557,36 @@ function toggleSection(sectionId) {
   }
 }
 
-// Ensure only one of fanart controls or text controls is visible at once
-function toggleExclusive(sectionId) {
-  const other = sectionId === 'fanart-controls' ? 'controls-panel' : 'fanart-controls';
-  const section = document.getElementById(sectionId);
-  const otherSection = document.getElementById(other);
+const EXCLUSIVE_PANELS = ['fanart-controls', 'metal-archives-controls', 'controls-panel'];
 
+function toggleExclusive(sectionId) {
+  const section = document.getElementById(sectionId);
   if (section.classList.contains('hidden')) {
-    // show requested, hide other
+    // Hide all other panels
+    EXCLUSIVE_PANELS.forEach(id => {
+      if (id === sectionId) return;
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.add('hidden');
+      if (id === 'controls-panel') el.style.display = 'none';
+    });
+    // Show requested panel
     section.classList.remove('hidden');
     if (sectionId === 'controls-panel') section.style.display = 'grid';
-    if (otherSection) {
-      otherSection.classList.add('hidden');
-      if (other === 'controls-panel') otherSection.style.display = 'none';
-    }
-    // update section button active state
+    // Update button active states
     document.querySelectorAll('.section-btn').forEach(btn => {
       const onclick = btn.getAttribute('onclick') || '';
-      if (onclick.includes(`toggleExclusive('${sectionId}')`) || onclick.includes(`toggleExclusive("${sectionId}")`)) btn.classList.add('active'); else btn.classList.remove('active');
+      btn.classList.toggle('active',
+        onclick.includes(`toggleExclusive('${sectionId}')`) || onclick.includes(`toggleExclusive("${sectionId}")`));
     });
   } else {
-    // hide requested
+    // Toggle off the active panel
     section.classList.add('hidden');
     if (sectionId === 'controls-panel') section.style.display = 'none';
-    // remove active state from buttons for this section
     document.querySelectorAll('.section-btn').forEach(btn => {
       const onclick = btn.getAttribute('onclick') || '';
-      if (onclick.includes(`toggleExclusive('${sectionId}')`) || onclick.includes(`toggleExclusive("${sectionId}")`)) btn.classList.remove('active');
+      if (onclick.includes(`toggleExclusive('${sectionId}')`) || onclick.includes(`toggleExclusive("${sectionId}")`))
+        btn.classList.remove('active');
     });
   }
 }
