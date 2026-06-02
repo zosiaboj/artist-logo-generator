@@ -182,6 +182,23 @@ function setupEventListeners() {
         closeLightbox();
       }
     });
+
+    // Paste image from clipboard (only when an artist is loaded)
+    document.addEventListener('paste', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (!currentKey) return;
+      const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'));
+      if (!item) return showToast('No image in clipboard', 'error');
+      e.preventDefault();
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        selectedUrl = ev.target.result;
+        document.getElementById('preview-img').src = selectedUrl;
+        window.resetFilters && window.resetFilters();
+        showToast('Image pasted!');
+      };
+      reader.readAsDataURL(item.getAsFile());
+    });
 }
 
 function selectFont(fontName) {
