@@ -54,3 +54,13 @@ Special Elite
 # Other
 Bitcount Grid Double Ink
 Uncial Antiqua
+
+# CJK (Chinese / Japanese / Korean)
+# Non-Latin characters in any artist name automatically render with Noto Sans SC
+# as a fallback; these fonts let you choose a CJK primary style explicitly.
+Noto Sans SC
+Noto Serif SC
+Ma Shan Zheng
+ZCOOL QingKe HuangYou
+Shippori Mincho
+BIZ UDGothic

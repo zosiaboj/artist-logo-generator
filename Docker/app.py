@@ -56,6 +56,24 @@ def index():
 
 _ALLOWED_FONT_EXTENSIONS = {'.ttf', '.otf', '.woff', '.woff2'}
 
+# Fonts whose glyphs are primarily non-Latin — downloaded without a latin subset restriction
+# so their full CJK/script coverage is preserved.
+_CJK_FONTS = {'Noto Sans SC', 'Noto Serif SC', 'Noto Sans JP', 'Noto Serif JP', 'Noto Sans KR',
+               'Ma Shan Zheng', 'ZCOOL QingKe HuangYou', 'Shippori Mincho', 'BIZ UDGothic',
+               'Zen Kurenaido', 'DotGothic16'}
+
+_cjk_fallback_font_name = 'Noto Sans SC'
+
+def get_cjk_fallback_font_path():
+    """Returns path to the Noto Sans SC fallback font, downloading it if needed."""
+    font_basename = f"{_cjk_fallback_font_name.replace(' ', '')}-Regular"
+    font_dir = logic.FONT_DIR
+    for ext in ['.ttf', '.otf']:
+        f_path = os.path.join(font_dir, font_basename + ext)
+        if os.path.exists(f_path):
+            return f_path
+    return download_font_if_needed(_cjk_fallback_font_name)
+
 def download_font_if_needed(font_name):
     """Checks if a font is available locally, and if not, downloads it from Google Fonts.
 
@@ -66,11 +84,9 @@ def download_font_if_needed(font_name):
         print(f"Font '{font_name}' is not in the allowed fonts list.")
         return None
 
-    # Let's not assume ttf. We'll check for any valid font file.
     font_basename = f"{font_name.replace(' ', '')}-Regular"
     font_dir = logic.FONT_DIR
-    
-    # Check if a font file exists (with any supported extension)
+
     for ext in ['.ttf', '.otf', '.woff', '.woff2']:
         f_path = os.path.join(font_dir, font_basename + ext)
         if os.path.exists(f_path):
@@ -79,11 +95,14 @@ def download_font_if_needed(font_name):
     print(f"Font '{font_name}' not found locally. Attempting to download from Google Fonts...")
 
     try:
-        # Use Fonts API v1 with subset=latin,latin-ext so the server returns a single font
-        # file covering both ranges. An old Android UA makes Google return TTF (not woff2
-        # split-by-unicode-range), giving us one file with all needed glyphs including
-        # Polish ł, ó, ą, ę etc.
-        css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}:regular&subset=latin,latin-ext"
+        # CJK fonts omit the latin subset so the full glyph coverage is returned.
+        # For Latin fonts: subset=latin,latin-ext forces a single file covering
+        # extended-Latin (Polish ł, ó, ą, ę etc.). The old Android UA makes Google
+        # return TTF instead of woff2 split-by-unicode-range in both cases.
+        if font_name in _CJK_FONTS:
+            css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}"
+        else:
+            css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}:regular&subset=latin,latin-ext"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Linux; U; Android 2.2; en-us; Nexus One Build/FRF91) AppleWebKit/533.1 (KHTML, like Gecko) Version/4.0 Mobile Safari/533.1'
         }
@@ -278,7 +297,9 @@ def save_custom():
     if not f_path:
         f_path = ImageFont.load_default()
 
-    img = logic.generate_text_logo(artist.title, f_path, **{k: data.get(k) for k in ['rows', 'color', 'case']})
+    cjk_path = None if font_name in _CJK_FONTS else get_cjk_fallback_font_path()
+    img = logic.generate_text_logo(artist.title, f_path, fallback_font_path=cjk_path,
+                                   **{k: data.get(k) for k in ['rows', 'color', 'case']})
     path = plex_utils.get_artist_path(artist.title)
     os.makedirs(path, exist_ok=True)
     img.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
@@ -405,12 +426,14 @@ def preview_text():
     if not f_path:
         f_path = ImageFont.load_default()
 
-    img = logic.generate_text_logo(artist.title, f_path, **{k: data.get(k) for k in ['rows', 'color', 'case']})
-    
+    cjk_path = None if font_name in _CJK_FONTS else get_cjk_fallback_font_path()
+    img = logic.generate_text_logo(artist.title, f_path, fallback_font_path=cjk_path,
+                                   **{k: data.get(k) for k in ['rows', 'color', 'case']})
+
     buffered = BytesIO()
     img.save(buffered, format="JPEG")
     img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-    
+
     return jsonify({"image": img_str})
 
 @app.route('/plex_proxy/<rating_key>')
@@ -443,9 +466,11 @@ def plex_proxy(rating_key):
         return jsonify({'status': 'error', 'message': 'Failed to fetch artist image'}), 500
 
 if __name__ == '__main__':
-    # Download all fonts on startup
     print("Downloading all fonts listed in fonts.txt...")
     for font in DEFAULT_FONTS:
         download_font_if_needed(font)
     print("Font download process finished.")
+    print("Pre-downloading CJK fallback font (Noto Sans SC)...")
+    get_cjk_fallback_font_path()
+    print("CJK fallback font ready.")
     app.run(host='0.0.0.0', port=5000)

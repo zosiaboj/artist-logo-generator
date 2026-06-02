@@ -4,6 +4,64 @@ from io import BytesIO
 
 FONT_DIR = '/app/fonts'
 
+def _is_nonlatin_char(char):
+    cp = ord(char)
+    return (
+        0x4E00 <= cp <= 0x9FFF or   # CJK Unified Ideographs
+        0x3400 <= cp <= 0x4DBF or   # CJK Extension A
+        0x3040 <= cp <= 0x30FF or   # Hiragana + Katakana
+        0xAC00 <= cp <= 0xD7AF or   # Hangul syllables
+        0xF900 <= cp <= 0xFAFF or   # CJK Compatibility Ideographs
+        0x0600 <= cp <= 0x06FF or   # Arabic
+        0x0590 <= cp <= 0x05FF or   # Hebrew
+        0x0900 <= cp <= 0x097F or   # Devanagari
+        0x0400 <= cp <= 0x04FF      # Cyrillic
+    )
+
+def _split_font_runs(text, primary_font, fallback_font):
+    """Splits text into [(chunk, font)] runs, routing non-Latin chars to fallback_font."""
+    runs = []
+    current = ""
+    current_needs_fallback = None
+    for char in text:
+        needs_fallback = _is_nonlatin_char(char)
+        if needs_fallback != current_needs_fallback and current:
+            runs.append((current, fallback_font if current_needs_fallback else primary_font))
+            current = ""
+        current_needs_fallback = needs_fallback
+        current += char
+    if current:
+        runs.append((current, fallback_font if current_needs_fallback else primary_font))
+    return runs
+
+def _render_mixed_line(line, primary_font, fallback_font, color):
+    """Render a line with font fallback, baseline-aligning runs from different fonts."""
+    runs = _split_font_runs(line, primary_font, fallback_font)
+    d = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+
+    run_data = []
+    for text, font in runs:
+        b = d.textbbox((0, 0), text, font=font)
+        run_data.append({'text': text, 'font': font, 'b': b})
+
+    g_top = min(rd['b'][1] for rd in run_data)
+    g_bot = max(rd['b'][3] for rd in run_data)
+    total_w = sum(rd['b'][2] - rd['b'][0] for rd in run_data)
+    total_h = g_bot - g_top
+
+    if total_w <= 0 or total_h <= 0:
+        return Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+
+    line_img = Image.new('RGBA', (total_w, total_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(line_img)
+    baseline_y = -g_top
+    x = 0
+    for rd in run_data:
+        b = rd['b']
+        draw.text((x - b[0], baseline_y), rd['text'], font=rd['font'], fill=color)
+        x += b[2] - b[0]
+    return line_img
+
 def apply_transforms(img, apply_default_size=True, invert=False, make_white=False, contrast=1.0, zoom=1.0, monochrome=False, tint=None):
     img = img.convert("RGBA")
     bbox = img.getbbox()
@@ -67,8 +125,7 @@ def apply_transforms(img, apply_default_size=True, invert=False, make_white=Fals
 
     return final
 
-def generate_text_logo(text, font_path, rows=1, color="white", case="none"):
-    # Ensure text is properly encoded as UTF-8
+def generate_text_logo(text, font_path, fallback_font_path=None, rows=1, color="white", case="none"):
     if isinstance(text, bytes):
         text = text.decode('utf-8')
     text = str(text)
@@ -87,14 +144,27 @@ def generate_text_logo(text, font_path, rows=1, color="white", case="none"):
             font = ImageFont.truetype(font_path, 400)
         except:
             font = ImageFont.load_default()
-    
+
+    fallback_font = None
+    if fallback_font_path:
+        try:
+            fallback_font = ImageFont.truetype(fallback_font_path, 400)
+        except Exception:
+            pass
+
+    use_fallback = fallback_font and any(_is_nonlatin_char(c) for c in text)
+
     line_imgs = []
-    d = ImageDraw.Draw(Image.new('RGBA', (1,1)))
-    for line in lines:
-        b = d.textbbox((0, 0), line, font=font)
-        li = Image.new('RGBA', (int(b[2]-b[0]), int(b[3]-b[1])), (0,0,0,0))
-        ImageDraw.Draw(li).text((-b[0], -b[1]), line, font=font, fill=color)
-        line_imgs.append(li)
+    if use_fallback:
+        for line in lines:
+            line_imgs.append(_render_mixed_line(line, font, fallback_font, color))
+    else:
+        d = ImageDraw.Draw(Image.new('RGBA', (1, 1)))
+        for line in lines:
+            b = d.textbbox((0, 0), line, font=font)
+            li = Image.new('RGBA', (int(b[2]-b[0]), int(b[3]-b[1])), (0,0,0,0))
+            ImageDraw.Draw(li).text((-b[0], -b[1]), line, font=font, fill=color)
+            line_imgs.append(li)
 
     max_w = max(l.width for l in line_imgs)
     total_h = sum(l.height for l in line_imgs) + (50 * (len(lines)-1))
