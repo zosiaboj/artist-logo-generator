@@ -213,7 +213,8 @@ def proxy_image():
         return 'invalid url', 400
 
     parsed = urlparse(normalized)
-    if parsed.hostname not in _ALLOWED_PROXY_HOSTS:
+    allowed_hosts = _ALLOWED_PROXY_HOSTS | ({plex_utils.PLEX_HOST} if plex_utils.PLEX_HOST else set())
+    if parsed.hostname not in allowed_hosts:
         return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
 
     url = normalized
