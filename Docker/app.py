@@ -1,4 +1,4 @@
-import os, base64, re, requests, json, zipfile
+import os, base64, re, requests, json
 from io import BytesIO
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file
@@ -74,38 +74,92 @@ def get_cjk_fallback_font_path():
             return f_path
     return download_font_if_needed(_cjk_fallback_font_name)
 
-def _download_cjk_font_zip(font_name, font_path):
-    """Download a CJK font via the Google Fonts zip-download endpoint.
+def _download_cjk_font_woff2(font_name, font_path):
+    """Download CJK font glyphs via Google Fonts CSS2 + fonttools woff2→TTF conversion.
 
-    The old Android UA trick only returns a latin-subset TTF for CJK fonts
-    (~34 KB, no ideographs). The zip endpoint returns the full static TTF
-    with all glyphs (~5-10 MB), which PIL/FreeType can use directly.
+    Google Fonts serves CJK fonts as many small woff2 shards split by unicode range.
+    A modern UA fetches the CSS2 manifest; we download the shards that cover the CJK
+    and CJK-extension unicode ranges, convert each woff2 to TTF with fonttools, merge
+    them into one font, and save the result. PIL/FreeType can then use it directly.
     """
-    url = f"https://fonts.google.com/download?family={font_name.replace(' ', '+')}"
     try:
-        r = requests.get(url, timeout=60, headers={'User-Agent': 'Mozilla/5.0'})
-        r.raise_for_status()
-        with zipfile.ZipFile(BytesIO(r.content)) as z:
-            candidates = [
-                f for f in z.namelist()
-                if f.endswith(('.ttf', '.otf'))
-                and 'Regular' in f
-                and 'static' not in f.lower()
-            ]
-            if not candidates:
-                candidates = [f for f in z.namelist() if f.endswith(('.ttf', '.otf'))]
-            if not candidates:
-                print(f"No font file found inside zip for '{font_name}'.")
-                return None
-            font_data = z.read(candidates[0])
-            os.makedirs(os.path.dirname(font_path), exist_ok=True)
-            with open(font_path, 'wb') as f:
-                f.write(font_data)
-            print(f"Downloaded '{font_name}' via zip ({len(font_data)//1024} KB) → {font_path}")
-            return font_path
-    except Exception as e:
-        print(f"Zip download failed for '{font_name}': {e}")
+        from fontTools.ttLib import TTFont
+        from fontTools import merge as ft_merge
+    except ImportError:
+        print("fonttools not available — cannot download CJK font.")
         return None
+
+    modern_ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    css_url = f"https://fonts.googleapis.com/css2?family={font_name.replace(' ', '+')}:wght@400"
+    try:
+        css = requests.get(css_url, headers={"User-Agent": modern_ua}, timeout=15).text
+    except Exception as e:
+        print(f"Failed to fetch CSS2 for '{font_name}': {e}")
+        return None
+
+    # Each @font-face block in the CSS looks like:
+    #   /* [N] */ @font-face { unicode-range: U+...; src: url(...woff2) ... }
+    # We want the blocks whose unicode-range covers CJK or CJK-extension codepoints.
+    _CJK_RANGE_RE = re.compile(
+        r'U\+(?:'
+        r'[3-9][0-9A-Fa-f]{3}|'   # U+3000–U+9FFF (Hiragana, Katakana, main CJK)
+        r'[fF][0-9A-Fa-f]{3}|'    # U+F900–U+FFFF (CJK compat)
+        r'2[0-9A-Fa-f]{4}'        # U+20000–U+2FFFF (CJK Extension B/C/D)
+        r')'
+    )
+    blocks = re.findall(r'/\*[^*]*\*/\s*@font-face\s*\{([^}]+)\}', css, re.DOTALL)
+    woff2_urls = []
+    for block in blocks:
+        if _CJK_RANGE_RE.search(block):
+            m = re.search(r'url\(([^)]+\.woff2[^)]*)\)', block)
+            if m:
+                woff2_urls.append(m.group(1).strip("'\""))
+
+    if not woff2_urls:
+        print(f"No CJK woff2 blocks found in CSS2 for '{font_name}'.")
+        return None
+
+    os.makedirs(os.path.dirname(font_path) or '.', exist_ok=True)
+    temp_ttfs = []
+    for i, url in enumerate(woff2_urls):
+        tmp = font_path + f".shard{i}.ttf"
+        try:
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            woff2_bytes = BytesIO(r.content)
+            font_obj = TTFont(woff2_bytes)
+            font_obj.save(tmp)
+            temp_ttfs.append(tmp)
+        except Exception as e:
+            print(f"Shard {i} failed for '{font_name}': {e}")
+
+    if not temp_ttfs:
+        print(f"All shards failed for '{font_name}'.")
+        return None
+
+    try:
+        if len(temp_ttfs) == 1:
+            os.rename(temp_ttfs[0], font_path)
+            temp_ttfs = []
+        else:
+            merger = ft_merge.Merger()
+            merged = merger.merge(temp_ttfs)
+            merged.save(font_path)
+        print(f"Downloaded '{font_name}' ({len(woff2_urls)} shards merged) → {font_path} "
+              f"({os.path.getsize(font_path)//1024} KB)")
+        return font_path
+    except Exception as e:
+        print(f"Merge failed for '{font_name}': {e}. Using first shard only.")
+        try:
+            os.rename(temp_ttfs[0], font_path)
+            print(f"Using shard 0 as '{font_name}' font ({os.path.getsize(font_path)//1024} KB)")
+            return font_path
+        except Exception:
+            return None
+    finally:
+        for p in temp_ttfs:
+            try: os.remove(p)
+            except: pass
 
 def download_font_if_needed(font_name):
     """Checks if a font is available locally, and if not, downloads it from Google Fonts.
@@ -137,7 +191,7 @@ def download_font_if_needed(font_name):
     font_path = os.path.join(font_dir, font_basename + '.ttf')
 
     if font_name in _CJK_FONTS:
-        return _download_cjk_font_zip(font_name, font_path)
+        return _download_cjk_font_woff2(font_name, font_path)
 
     try:
         # subset=latin,latin-ext forces a single file covering extended-Latin
