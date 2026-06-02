@@ -1,4 +1,16 @@
 /* Lightbox helpers (moved from editor.js) */
+
+// Returns a src suitable for an <img> tag: same-origin URLs are used as-is,
+// external URLs are routed through the server-side CORS proxy.
+function _lightboxSrc(u) {
+  if (!u) return u;
+  try {
+    const parsed = new URL(u, window.location.origin);
+    if (parsed.origin === window.location.origin) return parsed.pathname + parsed.search;
+  } catch (_) { /* fall through */ }
+  return `/proxy_image?url=${encodeURIComponent(u)}`;
+}
+
 function populateLightbox(imgs, startIndex = 0, preferSrc) {
   lightboxImages = imgs.slice();
   const thumbs = document.getElementById('lightbox-thumbs');
@@ -12,7 +24,7 @@ function populateLightbox(imgs, startIndex = 0, preferSrc) {
   }
   lightboxImages.forEach((u, i) => {
     const t = document.createElement('img');
-    const proxy = `/proxy_image?url=${encodeURIComponent(u)}`;
+    const proxy = _lightboxSrc(u);
     t.src = proxy;
     t.setAttribute('data-src', u);
     t.onclick = (e) => { updateLightbox(i); };
@@ -29,7 +41,7 @@ function updateLightbox(i) {
   lightboxIndex = i;
   const lbImg = document.getElementById('lightbox-img');
   const thumbs = document.getElementById('lightbox-thumbs');
-  if (lbImg) lbImg.src = `/proxy_image?url=${encodeURIComponent(lightboxImages[lightboxIndex])}`;
+  if (lbImg) lbImg.src = _lightboxSrc(lightboxImages[lightboxIndex]);
   if (thumbs) {
     Array.from(thumbs.children).forEach((n, idx) => {
       if (idx === lightboxIndex) n.classList.add('active'); else n.classList.remove('active');
