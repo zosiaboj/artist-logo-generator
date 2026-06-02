@@ -219,6 +219,12 @@ button:hover {
   border-color: var(--base-accent);
 }
 
+.section-btn.unavailable {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* Theme Toggle */
 #theme-switcher {
     position: fixed;
