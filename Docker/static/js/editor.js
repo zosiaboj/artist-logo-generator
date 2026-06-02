@@ -191,13 +191,16 @@ function setupEventListeners() {
       if (!item) return showToast('No image in clipboard', 'error');
       e.preventDefault();
       const reader = new FileReader();
+      reader.onerror = () => showToast('Failed to read clipboard image', 'error');
       reader.onload = (ev) => {
         selectedUrl = ev.target.result;
         document.getElementById('preview-img').src = selectedUrl;
         window.resetFilters && window.resetFilters();
         showToast('Image pasted!');
       };
-      reader.readAsDataURL(item.getAsFile());
+      const file = item.getAsFile();
+      if (!file) return showToast('Could not read image from clipboard', 'error');
+      reader.readAsDataURL(file);
     });
 }
 
