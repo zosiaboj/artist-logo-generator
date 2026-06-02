@@ -56,3 +56,7 @@ Thumbs.db
 *.woff
 *.woff2
 fonts/
+
+# AI BS
+CLAUDE.md
+.claude/
