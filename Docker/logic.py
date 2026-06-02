@@ -62,15 +62,25 @@ def apply_transforms(img, apply_default_size=True, invert=False, make_white=Fals
     return final
 
 def generate_text_logo(text, font_path, rows=1, color="white", case="none"):
+    # Ensure text is properly encoded as UTF-8
+    if isinstance(text, bytes):
+        text = text.decode('utf-8')
+    text = str(text)
+
     if case == "upper": text = text.upper()
     elif case == "lower": text = text.lower()
     words = text.split()
     n = len(words)
     wpl = (n + int(rows) - 1) // int(rows)
     lines = [" ".join(words[i : i + wpl]) for i in range(0, n, wpl)]
-    
-    try: font = ImageFont.truetype(font_path, 400)
-    except: font = ImageFont.load_default()
+
+    try:
+        font = ImageFont.truetype(font_path, 400, encoding='utf-8')
+    except:
+        try:
+            font = ImageFont.truetype(font_path, 400)
+        except:
+            font = ImageFont.load_default()
     
     line_imgs = []
     d = ImageDraw.Draw(Image.new('RGBA', (1,1)))
