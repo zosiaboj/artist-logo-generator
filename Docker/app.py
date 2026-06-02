@@ -1,10 +1,15 @@
 import os, base64, re, requests, json
+from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file
 from io import BytesIO
 from PIL import ImageFont
 import plex_utils, logic
 
 app = Flask(__name__)
+
+# Allowlist for the image proxy and set_poster endpoints.
+# Only these external domains may be fetched server-side to prevent SSRF.
+_ALLOWED_PROXY_HOSTS = {'assets.fanart.tv', 'www.metal-archives.com'}
 
 def load_default_fonts():
     """Loads default fonts from fonts.txt, with a fallback list."""
@@ -102,13 +107,19 @@ def download_font_if_needed(font_name):
 
 @app.route('/get_options/<rating_key>')
 def get_options(rating_key):
+    if not rating_key.isdigit():
+        return jsonify({"logos": []}), 400
     artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return jsonify({"logos": []}), 404
     logos = plex_utils.get_fanart_logos(artist)
     return jsonify({"logos": logos, "google_url": f"https://www.google.com/search?q={artist.title}+transparent+logo+png&tbm=isch"})
 
 
 @app.route('/get_metal_archives/<rating_key>')
 def get_metal_archives(rating_key):
+    if not rating_key.isdigit():
+        return jsonify({"logos": []}), 400
     artist = plex_utils.fetch_artist(rating_key)
     logos = plex_utils.get_metal_archives_logos(artist)
     return jsonify({"logos": logos})
@@ -116,6 +127,8 @@ def get_metal_archives(rating_key):
 
 @app.route('/get_posters/<rating_key>')
 def get_posters(rating_key):
+    if not rating_key.isdigit():
+        return jsonify({"posters": []}), 400
     artist = plex_utils.fetch_artist(rating_key)
     posters = plex_utils.get_artist_posters(artist)
     return jsonify({"posters": posters})
@@ -128,6 +141,10 @@ def set_poster():
     url = data.get('url')
     if not rating_key or not url:
         return jsonify({'status': 'error', 'message': 'rating_key and url required'}), 400
+
+    parsed = urlparse(url)
+    if parsed.hostname not in _ALLOWED_PROXY_HOSTS:
+        return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
 
     artist = plex_utils.fetch_artist(rating_key)
     if not artist:
@@ -172,6 +189,10 @@ def proxy_image():
     if not normalized or not (normalized.startswith('http://') or normalized.startswith('https://')):
         return 'invalid url', 400
 
+    parsed = urlparse(normalized)
+    if parsed.hostname not in _ALLOWED_PROXY_HOSTS:
+        return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
+
     url = normalized
 
     try:
@@ -185,12 +206,21 @@ def proxy_image():
 
 @app.route('/save', methods=['POST'])
 def save():
-    data = request.json
-    artist = plex_utils.fetch_artist(data['rating_key'])
-    if data['url'].startswith('data:image'):
-        img = logic.Image.open(BytesIO(base64.b64decode(data['url'].split(',')[1])))
+    data = request.json or {}
+    rating_key = data.get('rating_key')
+    url = data.get('url')
+    if not rating_key or not url:
+        return jsonify({'status': 'error', 'message': 'rating_key and url required'}), 400
+    artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return jsonify({'status': 'error', 'message': 'artist not found'}), 404
+    if url.startswith('data:image'):
+        img = logic.Image.open(BytesIO(base64.b64decode(url.split(',')[1])))
     else:
-        img = logic.Image.open(BytesIO(requests.get(data['url']).content))
+        parsed = urlparse(url)
+        if parsed.hostname not in _ALLOWED_PROXY_HOSTS:
+            return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
+        img = logic.Image.open(BytesIO(requests.get(url).content))
     
     final = logic.apply_transforms(img, **{k: data.get(k) for k in ['apply_default_size', 'invert', 'make_white', 'contrast', 'zoom', 'monochrome', 'tint']})
     path = plex_utils.get_artist_path(artist.title)
@@ -268,9 +298,6 @@ def bulk_apply_fanart():
                 path = plex_utils.get_artist_path(artist.title)
                 os.makedirs(path, exist_ok=True)
                 final.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
-                
-                if os.path.exists(os.path.join(path, ".custom")):
-                    os.remove(os.path.join(path, ".custom"))
                 
                 if os.environ.get('UPDATE_PLEX', 'false').lower() == 'true':
                     artist.uploadPoster(filepath=os.path.join(path, "artist.jpg"))

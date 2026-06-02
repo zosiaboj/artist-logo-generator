@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import re
 from plexapi.server import PlexServer
@@ -7,6 +8,9 @@ PLEX_URL = os.environ.get('PLEX_URL')
 PLEX_TOKEN = os.environ.get('PLEX_TOKEN')
 FANART_API_KEY = os.environ.get('FANART_API_KEY')
 BASE_OUTPUT_DIR = '/app/ArtistLogos'
+
+_mb_url_cache: dict[str, list[str]] = {}
+_MA_HEADERS = {"User-Agent": "artist-logo-generator/1.0 (homelab)"}
 
 try:
     server = PlexServer(PLEX_URL, PLEX_TOKEN)
@@ -41,8 +45,8 @@ def get_fanart_logos(artist_obj):
         if res.status_code == 200:
             data = res.json()
             return [l['url'] for l in (data.get('hdmusiclogo', []) + data.get('musiclogo', []))]
-    except Exception:
-        pass
+    except requests.RequestException as e:
+        print(f"get_fanart_logos network error: {e}")
     return []
 
 
@@ -105,45 +109,51 @@ def resource_to_url(val):
 
 
 def get_metal_archives_logos(artist_obj):
-    try:
-        mbid = next((g.id.split('://')[-1] for g in artist_obj.guids if 'mbid' in g.id), None)
-        if not mbid:
-            return []
+    if not artist_obj:
+        return []
 
+    mbid = next((g.id.split('://')[-1] for g in artist_obj.guids if 'mbid' in g.id), None)
+    if not mbid:
+        return []
+
+    if mbid not in _mb_url_cache:
+        time.sleep(1)  # MusicBrainz rate limit: 1 req/sec for anonymous clients
         mb_url = f"https://musicbrainz.org/ws/2/artist/{mbid}?inc=url-rels&fmt=json"
-        res = requests.get(mb_url, headers={"User-Agent": "artist-logo-generator/1.0 (homelab)"}, timeout=10)
+        try:
+            res = requests.get(mb_url, headers=_MA_HEADERS, timeout=10)
+        except requests.RequestException as e:
+            print(f"get_metal_archives_logos MB request failed: {e}")
+            return []
         if res.status_code != 200:
             return []
-
-        ma_urls = [
+        _mb_url_cache[mbid] = [
             rel['url']['resource']
             for rel in res.json().get('relations', [])
             if 'metal-archives' in rel.get('url', {}).get('resource', '')
         ]
-        if not ma_urls:
-            return []
 
-        logos = []
-        for ma_url in ma_urls:
-            match = re.search(r'/bands/[^/]+/(\d+)', ma_url)
-            if not match:
-                continue
-            band_id = match.group(1)
-            shard = "/".join(list(band_id))
-            base = f"https://www.metal-archives.com/images/{shard}/{band_id}_logo"
-            for ext in ("jpg", "jpeg", "png", "gif"):
-                url = f"{base}.{ext}"
-                try:
-                    r = requests.head(url, timeout=5)
-                    if r.status_code == 200:
-                        logos.append(url)
-                        break
-                except Exception:
-                    pass
-        return logos
-    except Exception as e:
-        print(f"get_metal_archives_logos error: {e}")
+    ma_urls = _mb_url_cache[mbid]
+    if not ma_urls:
         return []
+
+    logos = []
+    for ma_url in ma_urls:
+        match = re.search(r'/bands/[^/]+/(\d+)', ma_url)
+        if not match:
+            continue
+        band_id = match.group(1)
+        shard = "/".join(list(band_id))
+        base = f"https://www.metal-archives.com/images/{shard}/{band_id}_logo"
+        for ext in ("jpg", "jpeg", "png", "gif"):
+            url = f"{base}.{ext}"
+            try:
+                r = requests.head(url, headers=_MA_HEADERS, timeout=5)
+                if r.status_code == 200:
+                    logos.append(url)
+                    break
+            except requests.RequestException:
+                pass
+    return logos
 
 
 def get_artist_posters(artist_obj):
