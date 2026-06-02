@@ -104,6 +104,48 @@ def resource_to_url(val):
         return None
 
 
+def get_metal_archives_logos(artist_obj):
+    try:
+        mbid = next((g.id.split('://')[-1] for g in artist_obj.guids if 'mbid' in g.id), None)
+        if not mbid:
+            return []
+
+        mb_url = f"https://musicbrainz.org/ws/2/artist/{mbid}?inc=url-rels&fmt=json"
+        res = requests.get(mb_url, headers={"User-Agent": "artist-logo-generator/1.0 (homelab)"}, timeout=10)
+        if res.status_code != 200:
+            return []
+
+        ma_urls = [
+            rel['url']['resource']
+            for rel in res.json().get('relations', [])
+            if 'metal-archives' in rel.get('url', {}).get('resource', '')
+        ]
+        if not ma_urls:
+            return []
+
+        logos = []
+        for ma_url in ma_urls:
+            match = re.search(r'/bands/[^/]+/(\d+)', ma_url)
+            if not match:
+                continue
+            band_id = match.group(1)
+            shard = "/".join(list(band_id))
+            base = f"https://www.metal-archives.com/images/{shard}/{band_id}_logo"
+            for ext in ("jpg", "jpeg", "png", "gif"):
+                url = f"{base}.{ext}"
+                try:
+                    r = requests.head(url, timeout=5)
+                    if r.status_code == 200:
+                        logos.append(url)
+                        break
+                except Exception:
+                    pass
+        return logos
+    except Exception as e:
+        print(f"get_metal_archives_logos error: {e}")
+        return []
+
+
 def get_artist_posters(artist_obj):
     """Return a best-effort list of poster/artwork URLs for an artist object."""
     posters = []
