@@ -56,110 +56,66 @@ def index():
 
 _ALLOWED_FONT_EXTENSIONS = {'.ttf', '.otf', '.woff', '.woff2'}
 
-# Fonts whose glyphs are primarily non-Latin — downloaded without a latin subset restriction
-# so their full CJK/script coverage is preserved.
+# Fonts whose glyphs are primarily non-Latin — skip the latin,latin-ext subset
+# parameter so the download doesn't fail for fonts that have no Latin coverage.
 _CJK_FONTS = {'Noto Sans SC', 'Noto Serif SC', 'Noto Sans JP', 'Noto Serif JP', 'Noto Sans KR',
                'Ma Shan Zheng', 'ZCOOL QingKe HuangYou', 'Shippori Mincho', 'BIZ UDGothic',
                'Zen Kurenaido', 'DotGothic16'}
 
-_cjk_fallback_font_name = 'Noto Sans SC'
+_MODERN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-def get_cjk_fallback_font_path():
-    """Returns path to the Noto Sans SC fallback font, downloading it if needed."""
-    font_basename = f"{_cjk_fallback_font_name.replace(' ', '')}-Regular"
-    font_dir = logic.FONT_DIR
-    for ext in ['.ttf', '.otf']:
-        f_path = os.path.join(font_dir, font_basename + ext)
-        if os.path.exists(f_path):
-            return f_path
-    return download_font_if_needed(_cjk_fallback_font_name)
+_cjk_char_cache = {}          # chars_key → font_path
+_cjk_cache_lock = __import__('threading').Lock()
 
-def _download_cjk_font_woff2(font_name, font_path):
-    """Download CJK font glyphs via Google Fonts CSS2 + fonttools woff2→TTF conversion.
+def get_cjk_font_for_text(text):
+    """Return a TTF covering the non-Latin characters in text.
 
-    Google Fonts serves CJK fonts as many small woff2 shards split by unicode range.
-    A modern UA fetches the CSS2 manifest; we download the shards that cover the CJK
-    and CJK-extension unicode ranges, convert each woff2 to TTF with fonttools, merge
-    them into one font, and save the result. PIL/FreeType can then use it directly.
+    Uses Google Fonts CSS2 text= subsetting to download only the specific glyphs
+    needed, converting woff2→TTF in-memory with fonttools. Result is cached by
+    the frozenset of non-Latin characters in the text.
     """
     try:
         from fontTools.ttLib import TTFont
-        from fontTools import merge as ft_merge
     except ImportError:
-        print("fonttools not available — cannot download CJK font.")
         return None
 
-    modern_ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    css_url = f"https://fonts.googleapis.com/css2?family={font_name.replace(' ', '+')}:wght@400"
+    cjk_chars = ''.join(sorted(set(c for c in text if logic._is_nonlatin_char(c))))
+    if not cjk_chars:
+        return None
+
+    with _cjk_cache_lock:
+        cached = _cjk_char_cache.get(cjk_chars)
+        if cached and os.path.exists(cached):
+            return cached
+
+    from urllib.parse import quote
+    import hashlib
+    css_url = (f"https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400"
+               f"&text={quote(cjk_chars)}")
     try:
-        css = requests.get(css_url, headers={"User-Agent": modern_ua}, timeout=15).text
-    except Exception as e:
-        print(f"Failed to fetch CSS2 for '{font_name}': {e}")
-        return None
-
-    # Each @font-face block in the CSS looks like:
-    #   /* [N] */ @font-face { unicode-range: U+...; src: url(...woff2) ... }
-    # We want the blocks whose unicode-range covers CJK or CJK-extension codepoints.
-    _CJK_RANGE_RE = re.compile(
-        r'U\+(?:'
-        r'[3-9][0-9A-Fa-f]{3}|'   # U+3000–U+9FFF (Hiragana, Katakana, main CJK)
-        r'[fF][0-9A-Fa-f]{3}|'    # U+F900–U+FFFF (CJK compat)
-        r'2[0-9A-Fa-f]{4}'        # U+20000–U+2FFFF (CJK Extension B/C/D)
-        r')'
-    )
-    blocks = re.findall(r'/\*[^*]*\*/\s*@font-face\s*\{([^}]+)\}', css, re.DOTALL)
-    woff2_urls = []
-    for block in blocks:
-        if _CJK_RANGE_RE.search(block):
-            m = re.search(r'url\(([^)]+\.woff2[^)]*)\)', block)
-            if m:
-                woff2_urls.append(m.group(1).strip("'\""))
-
-    if not woff2_urls:
-        print(f"No CJK woff2 blocks found in CSS2 for '{font_name}'.")
-        return None
-
-    os.makedirs(os.path.dirname(font_path) or '.', exist_ok=True)
-    temp_ttfs = []
-    for i, url in enumerate(woff2_urls):
-        tmp = font_path + f".shard{i}.ttf"
-        try:
-            r = requests.get(url, timeout=30)
-            r.raise_for_status()
-            woff2_bytes = BytesIO(r.content)
-            font_obj = TTFont(woff2_bytes)
-            font_obj.save(tmp)
-            temp_ttfs.append(tmp)
-        except Exception as e:
-            print(f"Shard {i} failed for '{font_name}': {e}")
-
-    if not temp_ttfs:
-        print(f"All shards failed for '{font_name}'.")
-        return None
-
-    try:
-        if len(temp_ttfs) == 1:
-            os.rename(temp_ttfs[0], font_path)
-            temp_ttfs = []
-        else:
-            merger = ft_merge.Merger()
-            merged = merger.merge(temp_ttfs)
-            merged.save(font_path)
-        print(f"Downloaded '{font_name}' ({len(woff2_urls)} shards merged) → {font_path} "
-              f"({os.path.getsize(font_path)//1024} KB)")
-        return font_path
-    except Exception as e:
-        print(f"Merge failed for '{font_name}': {e}. Using first shard only.")
-        try:
-            os.rename(temp_ttfs[0], font_path)
-            print(f"Using shard 0 as '{font_name}' font ({os.path.getsize(font_path)//1024} KB)")
-            return font_path
-        except Exception:
+        css = requests.get(css_url, headers={"User-Agent": _MODERN_UA}, timeout=15).text
+        woff2_urls = re.findall(r'url\(([^)]+\.woff2[^)]*)\)', css)
+        if not woff2_urls:
+            print(f"No woff2 URL for CJK chars {cjk_chars!r}")
             return None
-    finally:
-        for p in temp_ttfs:
-            try: os.remove(p)
-            except: pass
+
+        char_hash = hashlib.md5(cjk_chars.encode()).hexdigest()[:10]
+        font_path = os.path.join(logic.FONT_DIR, f'cjk_subset_{char_hash}.ttf')
+
+        if not os.path.exists(font_path):
+            r = requests.get(woff2_urls[0], timeout=30)
+            r.raise_for_status()
+            os.makedirs(logic.FONT_DIR, exist_ok=True)
+            TTFont(BytesIO(r.content)).save(font_path)
+            print(f"CJK subset for {cjk_chars!r} → {font_path} ({os.path.getsize(font_path)//1024} KB)")
+
+        with _cjk_cache_lock:
+            _cjk_char_cache[cjk_chars] = font_path
+        return font_path
+
+    except Exception as e:
+        print(f"CJK font download failed for {cjk_chars!r}: {e}")
+        return None
 
 def download_font_if_needed(font_name):
     """Checks if a font is available locally, and if not, downloads it from Google Fonts.
@@ -174,30 +130,21 @@ def download_font_if_needed(font_name):
     font_basename = f"{font_name.replace(' ', '')}-Regular"
     font_dir = logic.FONT_DIR
 
-    # CJK fonts downloaded via the old CSS v1 trick are tiny latin-only stubs (~34 KB).
-    # Delete them so the correct zip-based download runs on this call.
-    _CJK_MIN_SIZE = 500 * 1024  # 500 KB
     for ext in ['.ttf', '.otf', '.woff', '.woff2']:
         f_path = os.path.join(font_dir, font_basename + ext)
         if os.path.exists(f_path):
-            if font_name in _CJK_FONTS and os.path.getsize(f_path) < _CJK_MIN_SIZE:
-                print(f"'{font_name}' font file too small ({os.path.getsize(f_path)//1024} KB) — re-downloading.")
-                os.remove(f_path)
-                break
             return f_path
 
     print(f"Font '{font_name}' not found locally. Attempting to download from Google Fonts...")
 
-    font_path = os.path.join(font_dir, font_basename + '.ttf')
-
-    if font_name in _CJK_FONTS:
-        return _download_cjk_font_woff2(font_name, font_path)
-
     try:
-        # subset=latin,latin-ext forces a single file covering extended-Latin
-        # (Polish ł, ó, ą, ę etc.). The old Android UA makes Google return TTF
-        # instead of woff2 split-by-unicode-range.
-        css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}:regular&subset=latin,latin-ext"
+        # CJK fonts don't support the latin,latin-ext subset — omit it for those.
+        # For Latin fonts: subset=latin,latin-ext forces a single TTF covering
+        # extended-Latin (Polish ł, ó, ą, ę etc.) via the old Android UA trick.
+        if font_name in _CJK_FONTS:
+            css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}"
+        else:
+            css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}:regular&subset=latin,latin-ext"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Linux; U; Android 2.2; en-us; Nexus One Build/FRF91) AppleWebKit/533.1 (KHTML, like Gecko) Version/4.0 Mobile Safari/533.1'
         }
@@ -389,7 +336,7 @@ def save_custom():
     if not f_path:
         f_path = ImageFont.load_default()
 
-    cjk_path = None if font_name in _CJK_FONTS else get_cjk_fallback_font_path()
+    cjk_path = get_cjk_font_for_text(artist.title)
     img = logic.generate_text_logo(artist.title, f_path, fallback_font_path=cjk_path,
                                    **{k: data.get(k) for k in ['rows', 'color', 'case']})
     path = plex_utils.get_artist_path(artist.title)
@@ -518,7 +465,7 @@ def preview_text():
     if not f_path:
         f_path = ImageFont.load_default()
 
-    cjk_path = None if font_name in _CJK_FONTS else get_cjk_fallback_font_path()
+    cjk_path = get_cjk_font_for_text(artist.title)
     img = logic.generate_text_logo(artist.title, f_path, fallback_font_path=cjk_path,
                                    **{k: data.get(k) for k in ['rows', 'color', 'case']})
 
@@ -562,7 +509,5 @@ if __name__ == '__main__':
     for font in DEFAULT_FONTS:
         download_font_if_needed(font)
     print("Font download process finished.")
-    print("Pre-downloading CJK fallback font (Noto Sans SC)...")
-    get_cjk_fallback_font_path()
-    print("CJK fallback font ready.")
+    # CJK subset fonts are downloaded lazily on first preview/save request.
     app.run(host='0.0.0.0', port=5000)
