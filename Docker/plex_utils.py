@@ -2,6 +2,8 @@ import os
 import time
 import requests
 import re
+import pathlib
+from urllib.parse import urlparse
 from plexapi.server import PlexServer
 
 PLEX_URL = os.environ.get('PLEX_URL')
@@ -9,6 +11,11 @@ PLEX_TOKEN = os.environ.get('PLEX_TOKEN')
 FANART_API_KEY = os.environ.get('FANART_API_KEY')
 BASE_OUTPUT_DIR = '/app/ArtistLogos'
 
+# Derive Plex hostname once at startup so plex_proxy can validate it
+PLEX_HOST = urlparse(PLEX_URL).hostname if PLEX_URL else None
+
+# Bounded MusicBrainz URL cache — prevents unbounded memory growth on large libraries
+_MB_CACHE_MAX = 1000
 _mb_url_cache: dict[str, list[str]] = {}
 _MA_HEADERS = {"User-Agent": "artist-logo-generator/1.0 (homelab)"}
 
@@ -28,8 +35,14 @@ def fetch_artist(rating_key):
 
 
 def get_artist_path(title):
-    clean = re.sub(r'[\\/*?:"<>|]', "", title).strip()
-    return os.path.join(BASE_OUTPUT_DIR, clean)
+    # Strip dangerous chars including dots (to block '..') and forward slash
+    clean = re.sub(r'[\\/*?:"<>|.]', "", title).strip().replace('/', '')
+    base = pathlib.Path(BASE_OUTPUT_DIR).resolve()
+    candidate = (base / clean).resolve()
+    # Ensure the resolved path stays inside BASE_OUTPUT_DIR
+    if not str(candidate).startswith(str(base) + os.sep) and candidate != base:
+        raise ValueError(f"Path traversal attempt blocked for title: {title!r}")
+    return str(candidate)
 
 
 def get_fanart_logos(artist_obj):
@@ -126,11 +139,15 @@ def get_metal_archives_logos(artist_obj):
             return []
         if res.status_code != 200:
             return []
-        _mb_url_cache[mbid] = [
+        urls = [
             rel['url']['resource']
             for rel in res.json().get('relations', [])
             if 'metal-archives' in rel.get('url', {}).get('resource', '')
         ]
+        # Evict oldest entry when cache is full (insertion-ordered dict, Python 3.7+)
+        if len(_mb_url_cache) >= _MB_CACHE_MAX:
+            _mb_url_cache.pop(next(iter(_mb_url_cache)))
+        _mb_url_cache[mbid] = urls
 
     ma_urls = _mb_url_cache[mbid]
     if not ma_urls:

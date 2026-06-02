@@ -33,10 +33,10 @@
             </div>
             <div id="artist-list">
                 {% for a in artists %}
-                <div class="artist-item" id="item-{{ a.obj.ratingKey }}" data-name="{{ a.obj.title }}" data-status="{{ a.status }}" onclick="loadArtist('{{ a.obj.ratingKey }}', '{{ a.obj.title }}')">
-                    <input type="checkbox" class="artist-checkbox" data-key="{{ a.obj.ratingKey }}" onclick="handleSelection(event, '{{ a.obj.ratingKey }}')">
+                <div class="artist-item" id="item-{{ a.obj.ratingKey }}" data-name="{{ a.obj.title }}" data-key="{{ a.obj.ratingKey }}" data-status="{{ a.status }}" onclick="loadArtist(this.dataset.key, this.dataset.name)">
+                    <input type="checkbox" class="artist-checkbox" data-key="{{ a.obj.ratingKey }}" onclick="handleSelection(event, this.dataset.key)">
                     <span class="artist-name">{{ a.obj.title }}</span>
-                    <button class="status-dot status-{{ a.status }}" onclick="toggleStatus(event, '{{ a.obj.ratingKey }}')"></button>
+                    <button class="status-dot status-{{ a.status }}" data-key="{{ a.obj.ratingKey }}" onclick="toggleStatus(event, this.dataset.key)"></button>
                 </div>
                 {% endfor %}
             </div>

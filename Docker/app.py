@@ -1,15 +1,27 @@
 import os, base64, re, requests, json
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from io import BytesIO
 from PIL import ImageFont
 import plex_utils, logic
 
 app = Flask(__name__)
 
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["120 per minute"],
+    storage_uri="memory://",
+)
+
 # Allowlist for the image proxy and set_poster endpoints.
 # Only these external domains may be fetched server-side to prevent SSRF.
 _ALLOWED_PROXY_HOSTS = {'assets.fanart.tv', 'www.metal-archives.com'}
+
+# Allowlist for Content-Type headers forwarded to the browser
+_ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 
 def load_default_fonts():
     """Loads default fonts from fonts.txt, with a fallback list."""
@@ -42,8 +54,18 @@ def index():
         data.append({'obj': a, 'status': status})
     return render_template('index.html', artists=data, fonts=DEFAULT_FONTS)
 
+_ALLOWED_FONT_EXTENSIONS = {'.ttf', '.otf', '.woff', '.woff2'}
+
 def download_font_if_needed(font_name):
-    """Checks if a font is available locally, and if not, downloads it from Google Fonts."""
+    """Checks if a font is available locally, and if not, downloads it from Google Fonts.
+
+    Only fonts in DEFAULT_FONTS are permitted — rejects arbitrary font names to prevent
+    HTTP header injection and path traversal via the font_name parameter.
+    """
+    if font_name not in DEFAULT_FONTS:
+        print(f"Font '{font_name}' is not in the allowed fonts list.")
+        return None
+
     # Let's not assume ttf. We'll check for any valid font file.
     font_basename = f"{font_name.replace(' ', '')}-Regular"
     font_dir = logic.FONT_DIR
@@ -76,14 +98,15 @@ def download_font_if_needed(font_name):
 
         font_url = font_urls[0]
 
-        # Determine file extension
-        extension = ".ttf" # default
-        if ".woff2" in font_url:
-            extension = ".woff2"
-        elif ".woff" in font_url:
-            extension = ".woff"
-        elif ".otf" in font_url:
-            extension = ".otf"
+        # Determine file extension — only write files with an allowed extension
+        extension = ".ttf"  # safe default
+        for allowed_ext in ('.woff2', '.woff', '.otf', '.ttf'):
+            if allowed_ext in font_url:
+                extension = allowed_ext
+                break
+        if extension not in _ALLOWED_FONT_EXTENSIONS:
+            print(f"Unexpected font extension for '{font_name}', aborting download.")
+            return None
 
         font_filename = font_basename + extension
         f_path = os.path.join(font_dir, font_filename)
@@ -170,7 +193,7 @@ def set_poster():
         return jsonify({'status': 'success'})
     except Exception as e:
         print(f"set_poster error: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return jsonify({'status': 'error', 'message': 'Failed to set poster'}), 500
 
 
 @app.route('/proxy_image')
@@ -198,11 +221,14 @@ def proxy_image():
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
-        ct = r.headers.get('Content-Type', 'image/jpeg') or r.headers.get('Content-Type') or 'application/octet-stream'
+        ct = r.headers.get('Content-Type', 'image/jpeg') or 'image/jpeg'
+        # Only forward image MIME types — prevents XSS via a malicious upstream Content-Type
+        if ct.split(';')[0].strip() not in _ALLOWED_IMAGE_TYPES:
+            ct = 'image/jpeg'
         return send_file(BytesIO(r.content), mimetype=ct)
     except Exception as e:
         print(f"proxy_image error fetching {url}: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 502
+        return jsonify({'status': 'error', 'message': 'Failed to fetch image'}), 502
 
 @app.route('/save', methods=['POST'])
 def save():
@@ -220,7 +246,7 @@ def save():
         parsed = urlparse(url)
         if parsed.hostname not in _ALLOWED_PROXY_HOSTS:
             return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
-        img = logic.Image.open(BytesIO(requests.get(url).content))
+        img = logic.Image.open(BytesIO(requests.get(url, timeout=20).content))
     
     final = logic.apply_transforms(img, **{k: data.get(k) for k in ['apply_default_size', 'invert', 'make_white', 'contrast', 'zoom', 'monochrome', 'tint']})
     path = plex_utils.get_artist_path(artist.title)
@@ -234,10 +260,18 @@ def save():
     return jsonify({"status": "success"})
 
 @app.route('/save_custom', methods=['POST'])
+@limiter.limit("15 per minute")
 def save_custom():
-    data = request.json
-    artist = plex_utils.fetch_artist(data['rating_key'])
-    font_name = data.get('font', 'Roboto') # Default to Roboto
+    data = request.json or {}
+    rating_key = str(data.get('rating_key', ''))
+    if not rating_key.isdigit():
+        return jsonify({'status': 'error', 'message': 'invalid rating_key'}), 400
+    artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return jsonify({'status': 'error', 'message': 'artist not found'}), 404
+    font_name = data.get('font', 'Roboto')
+    if font_name not in DEFAULT_FONTS:
+        font_name = 'Roboto'
 
     f_path = download_font_if_needed(font_name)
     if not f_path:
@@ -279,8 +313,9 @@ def toggle_status(rating_key):
     return jsonify({'status': 'success', 'new_status': next_status})
 
 @app.route('/bulk_apply_fanart', methods=['POST'])
+@limiter.limit("3 per minute")
 def bulk_apply_fanart():
-    data = request.json
+    data = request.json or {}
     artist_keys = data.get('artist_keys', [])
     updated_count = 0
 
@@ -288,11 +323,17 @@ def bulk_apply_fanart():
         try:
             artist = plex_utils.fetch_artist(key)
             logos = plex_utils.get_fanart_logos(artist)
-            
+
             if logos:
                 most_popular_logo_url = logos[0]
-                
-                img = logic.Image.open(BytesIO(requests.get(most_popular_logo_url).content))
+
+                # Apply same domain allowlist as proxy_image to prevent SSRF via fanart.tv response
+                parsed_logo = urlparse(most_popular_logo_url)
+                if parsed_logo.hostname not in _ALLOWED_PROXY_HOSTS:
+                    print(f"bulk_apply_fanart blocked unexpected host: {parsed_logo.hostname}")
+                    continue
+
+                img = logic.Image.open(BytesIO(requests.get(most_popular_logo_url, timeout=20).content))
                 final = logic.apply_transforms(img, apply_default_size=True) # Using default sizing
                 
                 path = plex_utils.get_artist_path(artist.title)
@@ -346,10 +387,18 @@ def bulk_toggle_status():
 
 
 @app.route('/preview_text', methods=['POST'])
+@limiter.limit("20 per minute")
 def preview_text():
-    data = request.json
-    artist = plex_utils.fetch_artist(data['rating_key'])
-    font_name = data.get('font', 'Roboto') # Default to Roboto
+    data = request.json or {}
+    rating_key = str(data.get('rating_key', ''))
+    if not rating_key.isdigit():
+        return jsonify({'status': 'error', 'message': 'invalid rating_key'}), 400
+    artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return jsonify({'status': 'error', 'message': 'artist not found'}), 404
+    font_name = data.get('font', 'Roboto')
+    if font_name not in DEFAULT_FONTS:
+        font_name = 'Roboto'
 
     f_path = download_font_if_needed(font_name)
     if not f_path:
@@ -365,20 +414,32 @@ def preview_text():
 
 @app.route('/plex_proxy/<rating_key>')
 def plex_proxy(rating_key):
+    if not rating_key.isdigit():
+        return 'invalid key', 400
     artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return 'artist not found', 404
     # Use plex_utils to convert artist.thumb into a usable URL
     try:
         thumb_url = plex_utils.resource_to_url(artist.thumb)
-
         if not thumb_url:
             return 'thumb not available', 404
 
+        # Validate we only fetch from the configured Plex server (prevents confused-deputy SSRF)
+        parsed = urlparse(thumb_url)
+        if plex_utils.PLEX_HOST and parsed.hostname != plex_utils.PLEX_HOST:
+            print(f"plex_proxy blocked unexpected host: {parsed.hostname}")
+            return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
+
         r = requests.get(thumb_url, timeout=15)
         r.raise_for_status()
-        return send_file(BytesIO(r.content), mimetype=r.headers.get('Content-Type', 'image/jpeg'))
+        ct = r.headers.get('Content-Type', 'image/jpeg') or 'image/jpeg'
+        if ct.split(';')[0].strip() not in _ALLOWED_IMAGE_TYPES:
+            ct = 'image/jpeg'
+        return send_file(BytesIO(r.content), mimetype=ct)
     except Exception as e:
         print(f"plex_proxy error: {e}")
-        return 'error', 500
+        return jsonify({'status': 'error', 'message': 'Failed to fetch artist image'}), 500
 
 if __name__ == '__main__':
     # Download all fonts on startup
