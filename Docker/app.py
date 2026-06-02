@@ -1,9 +1,9 @@
-import os, base64, re, requests, json
+import os, base64, re, requests, json, zipfile
+from io import BytesIO
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from io import BytesIO
 from PIL import ImageFont
 import plex_utils, logic
 
@@ -74,6 +74,39 @@ def get_cjk_fallback_font_path():
             return f_path
     return download_font_if_needed(_cjk_fallback_font_name)
 
+def _download_cjk_font_zip(font_name, font_path):
+    """Download a CJK font via the Google Fonts zip-download endpoint.
+
+    The old Android UA trick only returns a latin-subset TTF for CJK fonts
+    (~34 KB, no ideographs). The zip endpoint returns the full static TTF
+    with all glyphs (~5-10 MB), which PIL/FreeType can use directly.
+    """
+    url = f"https://fonts.google.com/download?family={font_name.replace(' ', '+')}"
+    try:
+        r = requests.get(url, timeout=60, headers={'User-Agent': 'Mozilla/5.0'})
+        r.raise_for_status()
+        with zipfile.ZipFile(BytesIO(r.content)) as z:
+            candidates = [
+                f for f in z.namelist()
+                if f.endswith(('.ttf', '.otf'))
+                and 'Regular' in f
+                and 'static' not in f.lower()
+            ]
+            if not candidates:
+                candidates = [f for f in z.namelist() if f.endswith(('.ttf', '.otf'))]
+            if not candidates:
+                print(f"No font file found inside zip for '{font_name}'.")
+                return None
+            font_data = z.read(candidates[0])
+            os.makedirs(os.path.dirname(font_path), exist_ok=True)
+            with open(font_path, 'wb') as f:
+                f.write(font_data)
+            print(f"Downloaded '{font_name}' via zip ({len(font_data)//1024} KB) → {font_path}")
+            return font_path
+    except Exception as e:
+        print(f"Zip download failed for '{font_name}': {e}")
+        return None
+
 def download_font_if_needed(font_name):
     """Checks if a font is available locally, and if not, downloads it from Google Fonts.
 
@@ -87,22 +120,30 @@ def download_font_if_needed(font_name):
     font_basename = f"{font_name.replace(' ', '')}-Regular"
     font_dir = logic.FONT_DIR
 
+    # CJK fonts downloaded via the old CSS v1 trick are tiny latin-only stubs (~34 KB).
+    # Delete them so the correct zip-based download runs on this call.
+    _CJK_MIN_SIZE = 500 * 1024  # 500 KB
     for ext in ['.ttf', '.otf', '.woff', '.woff2']:
         f_path = os.path.join(font_dir, font_basename + ext)
         if os.path.exists(f_path):
+            if font_name in _CJK_FONTS and os.path.getsize(f_path) < _CJK_MIN_SIZE:
+                print(f"'{font_name}' font file too small ({os.path.getsize(f_path)//1024} KB) — re-downloading.")
+                os.remove(f_path)
+                break
             return f_path
 
     print(f"Font '{font_name}' not found locally. Attempting to download from Google Fonts...")
 
+    font_path = os.path.join(font_dir, font_basename + '.ttf')
+
+    if font_name in _CJK_FONTS:
+        return _download_cjk_font_zip(font_name, font_path)
+
     try:
-        # CJK fonts omit the latin subset so the full glyph coverage is returned.
-        # For Latin fonts: subset=latin,latin-ext forces a single file covering
-        # extended-Latin (Polish ł, ó, ą, ę etc.). The old Android UA makes Google
-        # return TTF instead of woff2 split-by-unicode-range in both cases.
-        if font_name in _CJK_FONTS:
-            css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}"
-        else:
-            css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}:regular&subset=latin,latin-ext"
+        # subset=latin,latin-ext forces a single file covering extended-Latin
+        # (Polish ł, ó, ą, ę etc.). The old Android UA makes Google return TTF
+        # instead of woff2 split-by-unicode-range.
+        css_url = f"https://fonts.googleapis.com/css?family={font_name.replace(' ', '+')}:regular&subset=latin,latin-ext"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Linux; U; Android 2.2; en-us; Nexus One Build/FRF91) AppleWebKit/533.1 (KHTML, like Gecko) Version/4.0 Mobile Safari/533.1'
         }
@@ -117,8 +158,7 @@ def download_font_if_needed(font_name):
 
         font_url = font_urls[0]
 
-        # Determine file extension — only write files with an allowed extension
-        extension = ".ttf"  # safe default
+        extension = ".ttf"
         for allowed_ext in ('.woff2', '.woff', '.otf', '.ttf'):
             if allowed_ext in font_url:
                 extension = allowed_ext
@@ -127,9 +167,7 @@ def download_font_if_needed(font_name):
             print(f"Unexpected font extension for '{font_name}', aborting download.")
             return None
 
-        font_filename = font_basename + extension
-        f_path = os.path.join(font_dir, font_filename)
-
+        f_path = os.path.join(font_dir, font_basename + extension)
         font_response = requests.get(font_url)
         font_response.raise_for_status()
 
