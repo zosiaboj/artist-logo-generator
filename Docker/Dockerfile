@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 && rm -rf /var/lib/apt-lists/*
-RUN pip install --no-cache-dir plexapi requests Pillow Flask cloudscraper flask-limiter "fonttools[woff]"
+RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 libcairo2 libpango-1.0-0 libgdk-pixbuf-2.0-0 && rm -rf /var/lib/apt-lists/*
+RUN pip install --no-cache-dir plexapi requests Pillow Flask cloudscraper flask-limiter "fonttools[woff]" cairosvg
 COPY . .
 EXPOSE 5000
 CMD ["python", "app.py"]

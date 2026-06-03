@@ -302,7 +302,16 @@ def save():
     artist = plex_utils.fetch_artist(rating_key)
     if not artist:
         return jsonify({'status': 'error', 'message': 'artist not found'}), 404
-    if url.startswith('data:image'):
+    if url.startswith('data:image/svg+xml'):
+        try:
+            import cairosvg
+            svg_bytes = base64.b64decode(url.split(',')[1])
+            png_bytes = cairosvg.svg2png(bytestring=svg_bytes, output_width=1000, output_height=1000)
+            img = logic.Image.open(BytesIO(png_bytes))
+        except Exception as e:
+            print(f"SVG conversion failed: {e}")
+            return jsonify({'status': 'error', 'message': 'SVG conversion failed — try saving as PNG first'}), 400
+    elif url.startswith('data:image'):
         img = logic.Image.open(BytesIO(base64.b64decode(url.split(',')[1])))
     else:
         parsed = urlparse(url)

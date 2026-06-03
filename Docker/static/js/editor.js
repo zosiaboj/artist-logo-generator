@@ -187,16 +187,31 @@ function setupEventListeners() {
     document.addEventListener('paste', (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       if (!currentKey) return;
-      const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'));
-      if (!item) return showToast('No image in clipboard', 'error');
+
+      // File managers paste SVG files via clipboardData.files, not as image/* items
+      const pastedFiles = e.clipboardData.files;
+      const fileFromClipboard = pastedFiles && pastedFiles.length > 0
+        ? (Array.from(pastedFiles).find(f => f.type === 'image/svg+xml' || f.name.toLowerCase().endsWith('.svg'))
+           || Array.from(pastedFiles).find(f => f.type.startsWith('image/')))
+        : null;
+
+      const item = fileFromClipboard
+        ? null
+        : Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'));
+
+      if (!fileFromClipboard && !item) return showToast('No image in clipboard', 'error');
       e.preventDefault();
-      const file = item.getAsFile();
+
+      const file = fileFromClipboard || item.getAsFile();
       if (!file) return showToast('Could not read image from clipboard', 'error');
+
       const reader = new FileReader();
       reader.onerror = () => showToast('Failed to read clipboard image', 'error');
       reader.onload = async (ev) => {
         try {
-          const isSvg = item.type === 'image/svg+xml';
+          const isSvg = (file.type === 'image/svg+xml')
+            || (file.name && file.name.toLowerCase().endsWith('.svg'))
+            || ev.target.result.startsWith('data:image/svg+xml');
           const dataUrl = isSvg ? await convertSvgToPng(ev.target.result) : ev.target.result;
           selectedUrl = dataUrl;
           document.getElementById('preview-img').src = selectedUrl;
@@ -638,13 +653,18 @@ function convertSvgToPng(svgDataUrl) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
-      const w = img.naturalWidth > 0 ? img.naturalWidth : 1000;
-      const h = img.naturalHeight > 0 ? img.naturalHeight : 1000;
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      resolve(canvas.toDataURL('image/png'));
+      try {
+        const w = img.naturalWidth > 0 ? img.naturalWidth : 1000;
+        const h = img.naturalHeight > 0 ? img.naturalHeight : 1000;
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (err) {
+        // Canvas tainted (SVG with external resources) — reject so backend fallback handles it
+        reject(err);
+      }
     };
     img.onerror = () => reject(new Error('SVG render failed'));
     img.src = svgDataUrl;
@@ -657,7 +677,9 @@ window.handleUpload = window.handleUpload || function(input) {
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const isSvg = file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg');
+        const isSvg = file.type === 'image/svg+xml'
+          || file.name.toLowerCase().endsWith('.svg')
+          || e.target.result.startsWith('data:image/svg+xml');
         const dataUrl = isSvg ? await convertSvgToPng(e.target.result) : e.target.result;
         selectedUrl = dataUrl;
         document.getElementById("preview-img").src = selectedUrl;
