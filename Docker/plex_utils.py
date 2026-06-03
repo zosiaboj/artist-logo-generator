@@ -159,7 +159,7 @@ def get_metal_archives_logos(artist_obj):
         if not match:
             continue
         band_id = match.group(1)
-        shard = "/".join(list(band_id))
+        shard = "/".join(list(band_id[:4]))
         base = f"https://www.metal-archives.com/images/{shard}/{band_id}_logo"
         for ext in ("jpg", "jpeg", "png", "gif"):
             url = f"{base}.{ext}"
