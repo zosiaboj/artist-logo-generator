@@ -73,7 +73,8 @@
   position: relative;
 }
 
-#preview-container { background: #000000; padding: 22px; }
+#preview-container { background: #000000; padding: 22px; transition: outline 0.15s; }
+#preview-container.drag-over { outline: 3px dashed var(--accent, #7c6af7); outline-offset: -3px; }
 
 .preview-overlay {
   position: absolute;

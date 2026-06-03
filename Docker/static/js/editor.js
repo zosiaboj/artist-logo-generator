@@ -183,6 +183,37 @@ function setupEventListeners() {
       }
     });
 
+    // Drag-and-drop image/SVG onto preview (works for files from file managers)
+    const dropTarget = document.getElementById('preview-container');
+    if (dropTarget) {
+      dropTarget.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropTarget.classList.add('drag-over');
+      });
+      dropTarget.addEventListener('dragleave', (e) => {
+        if (!dropTarget.contains(e.relatedTarget)) dropTarget.classList.remove('drag-over');
+      });
+      dropTarget.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        dropTarget.classList.remove('drag-over');
+        if (!currentKey) return showToast('Select an artist first', 'error');
+        const file = Array.from(e.dataTransfer.files)
+          .find(f => f.type.startsWith('image/') || f.name.toLowerCase().endsWith('.svg'));
+        if (!file) return showToast('Drop an image or SVG file', 'error');
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          const isSvg = file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')
+            || ev.target.result.startsWith('data:image/svg+xml');
+          const dataUrl = isSvg ? await convertSvgToPng(ev.target.result) : ev.target.result;
+          selectedUrl = dataUrl;
+          document.getElementById('preview-img').src = selectedUrl;
+          window.resetFilters && window.resetFilters();
+          showToast(isSvg ? 'SVG dropped!' : 'Image dropped!');
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
     // Paste image from clipboard (only when an artist is loaded)
     document.addEventListener('paste', (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -208,18 +239,15 @@ function setupEventListeners() {
       const reader = new FileReader();
       reader.onerror = () => showToast('Failed to read clipboard image', 'error');
       reader.onload = async (ev) => {
-        try {
-          const isSvg = (file.type === 'image/svg+xml')
-            || (file.name && file.name.toLowerCase().endsWith('.svg'))
-            || ev.target.result.startsWith('data:image/svg+xml');
-          const dataUrl = isSvg ? await convertSvgToPng(ev.target.result) : ev.target.result;
-          selectedUrl = dataUrl;
-          document.getElementById('preview-img').src = selectedUrl;
-          window.resetFilters && window.resetFilters();
-          showToast(isSvg ? 'SVG converted to PNG!' : 'Image pasted!');
-        } catch (err) {
-          showToast('Failed to convert SVG to PNG', 'error');
-        }
+        const isSvg = (file.type === 'image/svg+xml')
+          || (file.name && file.name.toLowerCase().endsWith('.svg'))
+          || ev.target.result.startsWith('data:image/svg+xml');
+        const dataUrl = isSvg ? await convertSvgToPng(ev.target.result) : ev.target.result;
+        selectedUrl = dataUrl;
+        document.getElementById('preview-img').src = selectedUrl;
+        window.resetFilters && window.resetFilters();
+        const converted = isSvg && !dataUrl.startsWith('data:image/svg+xml');
+        showToast(isSvg ? (converted ? 'SVG converted to PNG!' : 'SVG pasted — will convert on save') : 'Image pasted!');
       };
       reader.readAsDataURL(file);
     });
@@ -650,9 +678,13 @@ window.updateCSS = window.updateCSS || function() { console.warn('updateCSS plac
 window.resetFilters = window.resetFilters || function() { console.warn('resetFilters placeholder: real implementation is in preview.js'); };
 
 function convertSvgToPng(svgDataUrl) {
-  return new Promise((resolve, reject) => {
+  // Always resolves — either with a PNG data URL (canvas worked) or the original
+  // SVG data URL (canvas tainted/failed) so the backend cairosvg can handle it.
+  return new Promise((resolve) => {
     const img = new Image();
+    const timeout = setTimeout(() => resolve(svgDataUrl), 5000);
     img.onload = () => {
+      clearTimeout(timeout);
       try {
         const w = img.naturalWidth > 0 ? img.naturalWidth : 1000;
         const h = img.naturalHeight > 0 ? img.naturalHeight : 1000;
@@ -661,12 +693,11 @@ function convertSvgToPng(svgDataUrl) {
         canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
         resolve(canvas.toDataURL('image/png'));
-      } catch (err) {
-        // Canvas tainted (SVG with external resources) — reject so backend fallback handles it
-        reject(err);
+      } catch (_) {
+        resolve(svgDataUrl); // tainted canvas — let backend handle it
       }
     };
-    img.onerror = () => reject(new Error('SVG render failed'));
+    img.onerror = () => { clearTimeout(timeout); resolve(svgDataUrl); };
     img.src = svgDataUrl;
   });
 }
@@ -676,17 +707,16 @@ window.handleUpload = window.handleUpload || function(input) {
     const file = input.files[0];
     const reader = new FileReader();
     reader.onload = async (e) => {
-      try {
-        const isSvg = file.type === 'image/svg+xml'
-          || file.name.toLowerCase().endsWith('.svg')
-          || e.target.result.startsWith('data:image/svg+xml');
-        const dataUrl = isSvg ? await convertSvgToPng(e.target.result) : e.target.result;
-        selectedUrl = dataUrl;
-        document.getElementById("preview-img").src = selectedUrl;
-        window.resetFilters && window.resetFilters();
-        if (isSvg) showToast('SVG converted to PNG!');
-      } catch (err) {
-        showToast('Failed to convert SVG to PNG', 'error');
+      const isSvg = file.type === 'image/svg+xml'
+        || file.name.toLowerCase().endsWith('.svg')
+        || e.target.result.startsWith('data:image/svg+xml');
+      const dataUrl = isSvg ? await convertSvgToPng(e.target.result) : e.target.result;
+      selectedUrl = dataUrl;
+      document.getElementById("preview-img").src = selectedUrl;
+      window.resetFilters && window.resetFilters();
+      if (isSvg) {
+        const converted = !dataUrl.startsWith('data:image/svg+xml');
+        showToast(converted ? 'SVG converted to PNG!' : 'SVG loaded — will convert on save');
       }
     };
     reader.readAsDataURL(file);
