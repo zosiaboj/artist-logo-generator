@@ -190,16 +190,22 @@ function setupEventListeners() {
       const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith('image/'));
       if (!item) return showToast('No image in clipboard', 'error');
       e.preventDefault();
-      const reader = new FileReader();
-      reader.onerror = () => showToast('Failed to read clipboard image', 'error');
-      reader.onload = (ev) => {
-        selectedUrl = ev.target.result;
-        document.getElementById('preview-img').src = selectedUrl;
-        window.resetFilters && window.resetFilters();
-        showToast('Image pasted!');
-      };
       const file = item.getAsFile();
       if (!file) return showToast('Could not read image from clipboard', 'error');
+      const reader = new FileReader();
+      reader.onerror = () => showToast('Failed to read clipboard image', 'error');
+      reader.onload = async (ev) => {
+        try {
+          const isSvg = item.type === 'image/svg+xml';
+          const dataUrl = isSvg ? await convertSvgToPng(ev.target.result) : ev.target.result;
+          selectedUrl = dataUrl;
+          document.getElementById('preview-img').src = selectedUrl;
+          window.resetFilters && window.resetFilters();
+          showToast(isSvg ? 'SVG converted to PNG!' : 'Image pasted!');
+        } catch (err) {
+          showToast('Failed to convert SVG to PNG', 'error');
+        }
+      };
       reader.readAsDataURL(file);
     });
 }
@@ -628,15 +634,40 @@ window.updateCSS = window.updateCSS || function() { console.warn('updateCSS plac
 
 window.resetFilters = window.resetFilters || function() { console.warn('resetFilters placeholder: real implementation is in preview.js'); };
 
+function convertSvgToPng(svgDataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth > 0 ? img.naturalWidth : 1000;
+      const h = img.naturalHeight > 0 ? img.naturalHeight : 1000;
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('SVG render failed'));
+    img.src = svgDataUrl;
+  });
+}
+
 window.handleUpload = window.handleUpload || function(input) {
   if (input.files && input.files[0]) {
+    const file = input.files[0];
     const reader = new FileReader();
-    reader.onload = (e) => {
-      selectedUrl = e.target.result;
-      document.getElementById("preview-img").src = selectedUrl;
-      window.resetFilters && window.resetFilters();
+    reader.onload = async (e) => {
+      try {
+        const isSvg = file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg');
+        const dataUrl = isSvg ? await convertSvgToPng(e.target.result) : e.target.result;
+        selectedUrl = dataUrl;
+        document.getElementById("preview-img").src = selectedUrl;
+        window.resetFilters && window.resetFilters();
+        if (isSvg) showToast('SVG converted to PNG!');
+      } catch (err) {
+        showToast('Failed to convert SVG to PNG', 'error');
+      }
     };
-    reader.readAsDataURL(input.files[0]);
+    reader.readAsDataURL(file);
   }
 };
 

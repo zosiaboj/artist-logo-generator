@@ -111,7 +111,7 @@
                             <button onclick="document.getElementById('manual-upload-2').click()" style="flex:1">Upload Image</button>
                             <button onclick="resetFilters()" style="flex:1">Reset</button>
                         </div>
-                        <input type="file" id="manual-upload-2" style="display:none" onchange="handleUpload(this)">
+                        <input type="file" id="manual-upload-2" accept="image/*,.svg" style="display:none" onchange="handleUpload(this)">
                     </div>
                     <div>
                         <button onclick="save()" style="width:100%; background:var(--state-success); color:white;">save logo</button>
