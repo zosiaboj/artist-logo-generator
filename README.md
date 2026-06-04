@@ -1,9 +1,10 @@
 # Artist Logo Generator
 
 A lightweight web UI and backend for browsing, editing and setting artist posters/logos in a Plex (music) library. It provides multiple logo sources:
-- **fanart.tv** — HD clearLOGO's via the fanart.tv API
+- **fanart.tv** — HD clearLOGOs via the fanart.tv API
 - **Metal Archives** — Band logos for metal/rock artists via MusicBrainz MBID lookup and Metal Archives image resolution
-- **Custom text logos** — Generate logos using fonts from Google Fonts
+- **TheAudioDB** — Artist logos via TheAudioDB API (MusicBrainz MBID based)
+- **Custom text logos** — Generate logos using fonts from Google Fonts, including non-Latin scripts (CJK, Arabic, Cyrillic)
 
 The logos can either be set manually, artist by artist, or in bulk by using the most popular fanart.tv logo for each artist.
 
@@ -13,25 +14,27 @@ The tool is able to invert the logo (useful if it's black with white outlines fo
 
 I was inspired by [this](https://github.com/LemonFaceSour/BandLogos) repo but wanted something that was able to set logos for all my artists, which is why I created this tool. I'm sharing it here since I figured other people might want to do the same, but I'm not planning on adding more features, fixing any issues, or maintaining it more than for my own use in the future.
 
-## Fork Changes: Metal Archives Pipeline + Security Hardening
+## Fork Changes
 
-This fork adds the Metal Archives logo pipeline alongside important security improvements and performance enhancements:
+This fork extends the original with additional logo sources, image input methods, and security hardening.
 
-### New: Metal Archives Pipeline
-- **Metal Archives logo source**: Artists with MusicBrainz IDs can now retrieve band logos from Metal Archives by:
-  1. Looking up MusicBrainz MBID from Plex artist metadata
-  2. Querying MusicBrainz for Metal Archives relations
-  3. Probing Metal Archives for available logo image files (`.jpg`, `.png`, `.gif`, etc.)
-  4. Returning accessible logos to the frontend
-- **MusicBrainz caching**: Responses are cached per MBID to avoid redundant API calls.
-- **Rate limiting**: MusicBrainz requests are rate-limited to 1 request/second to comply with API requirements.
-- **Improved API headers**: Includes proper User-Agent header for better compatibility.
+### Logo Sources
+- **Metal Archives**: Artists with MusicBrainz IDs can retrieve band logos via MusicBrainz MBID lookup → Metal Archives band ID → image resolution. Responses are cached per MBID; requests respect the 1 req/sec MusicBrainz rate limit.
+- **TheAudioDB**: A fourth logo source fetching artist logos from TheAudioDB via MusicBrainz MBID. Shown in a dedicated tab with paginated grid and async availability state.
+
+### Image Input
+- **Clipboard paste (Ctrl+V)**: With an artist selected, paste an image directly from the clipboard to use as a logo candidate.
+- **SVG support**: SVG files can be drag-and-dropped or pasted; they are converted to PNG server-side before processing.
+
+### Text Logo Improvements
+- **Non-Latin characters**: The text logo generator now supports CJK (Chinese/Japanese/Korean), Arabic, Cyrillic, and other extended Unicode scripts. Fonts are downloaded on-demand using Google Fonts CSS2 subsetting so only the needed glyphs are fetched.
 
 ### Security
-- **SSRF protection**: External image proxy validates against an allowlist (`fanart.tv`, `metal-archives.com`) to prevent Server-Side Request Forgery attacks.
+- **SSRF protection**: External image proxy validates against an allowlist (`fanart.tv`, `metal-archives.com`, `theaudiodb.com`) to prevent Server-Side Request Forgery attacks.
+- **Path traversal hardening**: Artist paths are sanitised to block `..` sequences and other traversal attempts.
 - **Input validation**: All endpoints validate `rating_key` parameters (must be numeric) and required fields before processing.
 - **URL validation**: All URLs parsed and validated before being used in requests or returned to clients.
-- **Better error handling**: More specific exception handling with logging for network errors and API failures. 
+- **Better error handling**: More specific exception handling with logging for network errors and API failures.
 
 # Screenshots
 *fanart.tv view*
@@ -68,9 +71,10 @@ docker compose up --build
 2. Visit the app in your browser (default `http://localhost:5000` unless overridden by compose).
 
 # Important endpoints
-- `/` – main UI with fanart.tv, Metal Archives, and custom text logo tabs.
+- `/` – main UI with fanart.tv, Metal Archives, TheAudioDB, Plex posters, and custom text logo tabs.
 - `/get_options/<rating_key>` – returns available fanart.tv logos for an artist via the fanart.tv API. Validates `rating_key` is numeric.
-- `/get_metal_archives/<rating_key>` – **NEW**: returns Metal Archives band logos by resolving MusicBrainz MBID → Metal Archives band ID → image URLs. Caches MusicBrainz responses; respects 1 req/sec rate limiting.
+- `/get_metal_archives/<rating_key>` – returns Metal Archives band logos by resolving MusicBrainz MBID → Metal Archives band ID → image URLs. Caches MusicBrainz responses; respects 1 req/sec rate limiting.
+- `/get_theaudiodb/<rating_key>` – returns TheAudioDB artist logos via MusicBrainz MBID lookup.
 - `/get_posters/<rating_key>` – returns Plex poster resources for an artist. Validates `rating_key` is numeric.
 - `/set_poster` – POST to set a poster for an artist in Plex (used by the lightbox "Use as artist image"). Validates `rating_key` and URL domain against allowlist.
 - `/preview_text` – generate preview for text-based logos.
@@ -86,7 +90,7 @@ docker compose up --build
 - The app normalises Plex resource URLs via `resource_to_url()` in `Docker/plex_utils.py`.
 - If cross-origin image masking fails, check `/proxy_image` behaviour and ensure Plex URLs are accessible to the service.
 - Use browser devtools network panel to inspect proxied image requests when debugging thumbnails or lightbox images.
-- **SSRF protection**: The image proxy (`/proxy_image` and `/set_poster`) only allows requests to whitelisted domains (`fanart.tv`, `metal-archives.com`). To add additional domains, update `_ALLOWED_PROXY_HOSTS` in `Docker/app.py`.
+- **SSRF protection**: The image proxy (`/proxy_image` and `/set_poster`) only allows requests to whitelisted domains (`fanart.tv`, `metal-archives.com`, `theaudiodb.com`). To add additional domains, update `_ALLOWED_PROXY_HOSTS` in `Docker/app.py`.
 - **MusicBrainz caching & rate limiting**: Metal Archives logo lookups cache MusicBrainz responses per MBID in `_mb_url_cache` to avoid redundant API calls. The app also respects MusicBrainz API rate limits (1 request/second) via `time.sleep()` in `get_metal_archives_logos()`. This prevents rate limiting errors when fetching multiple Metal Archives logos and improves performance for duplicate MBIDs.
 - **User-Agent headers**: Both Metal Archives and MusicBrainz requests include a proper User-Agent header (`artist-logo-generator/1.0 (homelab)`) for better API compatibility and identification.
 
