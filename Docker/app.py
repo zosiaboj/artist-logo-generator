@@ -18,7 +18,7 @@ limiter = Limiter(
 
 # Allowlist for the image proxy and set_poster endpoints.
 # Only these external domains may be fetched server-side to prevent SSRF.
-_ALLOWED_PROXY_HOSTS = {'assets.fanart.tv', 'www.metal-archives.com', 'www.theaudiodb.com'}
+_ALLOWED_PROXY_HOSTS = {'assets.fanart.tv', 'www.metal-archives.com', 'r2.theaudiodb.com', 'www.theaudiodb.com'}
 
 # Allowlist for Content-Type headers forwarded to the browser
 _ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
