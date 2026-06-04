@@ -173,6 +173,28 @@ def get_metal_archives_logos(artist_obj):
     return logos
 
 
+def get_theaudiodb_images(artist_obj):
+    try:
+        mbid = next((g.id.split('://')[-1] for g in artist_obj.guids if 'mbid' in g.id), None)
+    except Exception:
+        mbid = None
+    if not mbid:
+        return []
+    try:
+        url = f"https://www.theaudiodb.com/api/v1/json/123/artist-mb.php?i={mbid}"
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        artists = r.json().get('artists') or []
+        if not artists:
+            return []
+        a = artists[0]
+        fields = ['strArtistLogo']
+        return [a[f] for f in fields if a.get(f)]
+    except Exception as e:
+        print(f"get_theaudiodb_images error: {e}")
+        return []
+
+
 def get_artist_posters(artist_obj):
     """Return a best-effort list of poster/artwork URLs for an artist object."""
     posters = []

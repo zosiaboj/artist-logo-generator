@@ -15,6 +15,8 @@ let fanartLogos = [];
 let fanartPage = 1;
 let maLogos = [];
 let maPage = 1;
+let tadbLogos = [];
+let tadbPage = 1;
 let currentStatusFilter = 'all';
 let lightboxImages = [];
 let lightboxIndex = 0;
@@ -405,16 +407,22 @@ async function loadArtist(key, name) {
   document.getElementById("current-artist").innerText = name;
   document.getElementById("plex-img").src =
     `/plex_proxy/${key}?t=${Date.now()}`;
-  // Ensure fanart controls are shown by default when loading an artist
-  try {
-    toggleExclusive('fanart-controls');
-  } catch (e) {
-    // fallback: directly show fanart-controls
-    const fc = document.getElementById('fanart-controls');
-    const cp = document.getElementById('controls-panel');
-    if (fc) fc.classList.remove('hidden');
-    if (cp) { cp.classList.add('hidden'); cp.style.display = 'none'; }
-  }
+  // Always show fanart tab when loading a new artist
+  EXCLUSIVE_PANELS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === 'fanart-controls') {
+      el.classList.remove('hidden');
+    } else {
+      el.classList.add('hidden');
+      if (id === 'controls-panel') el.style.display = 'none';
+    }
+  });
+  document.querySelectorAll('.section-btn').forEach(btn => {
+    const onclick = btn.getAttribute('onclick') || '';
+    btn.classList.toggle('active',
+      onclick.includes("toggleExclusive('fanart-controls')") || onclick.includes('toggleExclusive("fanart-controls")'));
+  });
 
   // Fetch Fanart Options
   const res = await fetch(`/get_options/${key}`);
@@ -450,7 +458,35 @@ async function loadArtist(key, name) {
       if (maLogos.length > 0) setMABtnAvailable(); else setMABtnUnavailable();
     })
     .catch(() => setMABtnUnavailable());
-  
+
+  // Fetch TheAudioDB images asynchronously
+  tadbLogos = [];
+  tadbPage = 1;
+  renderTADBPage();
+  const tadbBtn = document.getElementById('tadb-tab-btn');
+  function setTADBBtnUnavailable() {
+    if (!tadbBtn) return;
+    tadbBtn.style.opacity = '0.35';
+    tadbBtn.style.pointerEvents = 'none';
+    tadbBtn.style.cursor = 'not-allowed';
+  }
+  function setTADBBtnAvailable() {
+    if (!tadbBtn) return;
+    tadbBtn.style.opacity = '';
+    tadbBtn.style.pointerEvents = '';
+    tadbBtn.style.cursor = '';
+  }
+  setTADBBtnUnavailable();
+  fetch(`/get_theaudiodb/${key}`)
+    .then(r => r.json())
+    .then(d => {
+      tadbLogos = d.logos || [];
+      tadbPage = 1;
+      renderTADBPage();
+      if (tadbLogos.length > 0) setTADBBtnAvailable(); else setTADBBtnUnavailable();
+    })
+    .catch(() => setTADBBtnUnavailable());
+
   // Close sidebar on mobile after selection
     if (window.innerWidth <= 800) {
         const sidebar = document.getElementById('artist-sidebar');
@@ -612,6 +648,75 @@ function renderMAPage() {
   };
 }
 
+function renderTADBPage() {
+  const grid = document.getElementById("tadb-grid");
+  const paginationControls = document.getElementById("tadb-pagination");
+  if (!grid || !paginationControls) return;
+  while (grid.firstChild) grid.removeChild(grid.firstChild);
+  while (paginationControls.firstChild) paginationControls.removeChild(paginationControls.firstChild);
+
+  if (!tadbLogos.length) {
+    const msg = document.createElement('p');
+    msg.style.cssText = 'opacity:0.5; font-size:13px; padding:10px;';
+    msg.textContent = 'No images found on TheAudioDB.';
+    grid.appendChild(msg);
+    return;
+  }
+
+  const w = window.innerWidth;
+  let cols = 3, rows = 3;
+  if (w >= 700) { cols = 3; rows = 3; }
+  else if (w >= 500) { cols = 2; rows = 2; }
+  else { cols = 1; rows = 1; }
+  const pageSize = Math.min(9, cols * rows);
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+  const logosToShow = tadbLogos.slice((tadbPage - 1) * pageSize, tadbPage * pageSize);
+  logosToShow.forEach(u => {
+    const img = document.createElement("img");
+    const proxy = `/proxy_image?url=${encodeURIComponent(u)}`;
+    img.src = proxy;
+    img.className = "logo-option";
+    img.onclick = () => {
+      selectedUrl = u;
+      document.getElementById("preview-img").src = proxy;
+      resetFilters();
+    };
+    grid.appendChild(img);
+  });
+
+  const totalPages = Math.max(1, Math.ceil(tadbLogos.length / pageSize));
+  const prevButton = document.createElement('button');
+  prevButton.className = 'pagination-btn';
+  prevButton.textContent = '<';
+  prevButton.disabled = tadbPage <= 1;
+  prevButton.onclick = () => { if (tadbPage > 1) { tadbPage--; renderTADBPage(); } };
+
+  const pageIndicator = document.createElement('span');
+  pageIndicator.textContent = `Page ${tadbPage} of ${totalPages}`;
+
+  const nextButton = document.createElement('button');
+  nextButton.className = 'pagination-btn';
+  nextButton.textContent = '>';
+  nextButton.disabled = tadbPage >= totalPages;
+  nextButton.onclick = () => { if (tadbPage < totalPages) { tadbPage++; renderTADBPage(); } };
+
+  paginationControls.appendChild(prevButton);
+  paginationControls.appendChild(pageIndicator);
+  paginationControls.appendChild(nextButton);
+
+  let touchStartX = null;
+  const threshold = 40;
+  grid.ontouchstart = (e) => { touchStartX = e.changedTouches[0].clientX; };
+  grid.ontouchend = (e) => {
+    if (touchStartX === null) return;
+    const diff = e.changedTouches[0].clientX - touchStartX;
+    if (diff > threshold && tadbPage > 1) { tadbPage--; renderTADBPage(); }
+    else if (diff < -threshold && tadbPage < totalPages) { tadbPage++; renderTADBPage(); }
+    touchStartX = null;
+  };
+}
+
 // --- EDITOR LOGIC ---
 
 function toggleSection(sectionId) {
@@ -626,7 +731,7 @@ function toggleSection(sectionId) {
   }
 }
 
-const EXCLUSIVE_PANELS = ['fanart-controls', 'metal-archives-controls', 'controls-panel'];
+const EXCLUSIVE_PANELS = ['fanart-controls', 'metal-archives-controls', 'tadb-controls', 'controls-panel'];
 
 function toggleExclusive(sectionId) {
   const section = document.getElementById(sectionId);
