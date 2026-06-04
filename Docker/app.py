@@ -18,7 +18,7 @@ limiter = Limiter(
 
 # Allowlist for the image proxy and set_poster endpoints.
 # Only these external domains may be fetched server-side to prevent SSRF.
-_ALLOWED_PROXY_HOSTS = {'assets.fanart.tv', 'www.metal-archives.com'}
+_ALLOWED_PROXY_HOSTS = {'assets.fanart.tv', 'www.metal-archives.com', 'www.theaudiodb.com'}
 
 # Allowlist for Content-Type headers forwarded to the browser
 _ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
@@ -207,6 +207,17 @@ def get_metal_archives(rating_key):
     artist = plex_utils.fetch_artist(rating_key)
     logos = plex_utils.get_metal_archives_logos(artist)
     return jsonify({"logos": logos})
+
+
+@app.route('/get_theaudiodb/<rating_key>')
+def get_theaudiodb(rating_key):
+    if not rating_key.isdigit():
+        return jsonify({'logos': []}), 400
+    artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return jsonify({'logos': []}), 404
+    logos = plex_utils.get_theaudiodb_images(artist)
+    return jsonify({'logos': logos})
 
 
 @app.route('/get_posters/<rating_key>')

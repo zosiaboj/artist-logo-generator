@@ -51,8 +51,9 @@
             <div class="panel preview-panel">
                 <div class="section-buttons">
                     <button class="section-btn section-title" onclick="toggleExclusive('fanart-controls')">fanart.tv</button>
-                    <button id="ma-tab-btn" class="section-btn section-title" onclick="toggleExclusive('metal-archives-controls')">Metal<br/>Archives</button>
-                    <button class="section-btn section-title" onclick="toggleExclusive('controls-panel')">Text<br/>Generator</button>
+                    <button id="ma-tab-btn" class="section-btn section-title" onclick="toggleExclusive('metal-archives-controls')">Metal Archives</button>
+                    <button id="tadb-tab-btn" class="section-btn section-title" onclick="toggleExclusive('tadb-controls')">TheAudioDB</button>
+                    <button class="section-btn section-title" onclick="toggleExclusive('controls-panel')">Text Generator</button>
                 </div>
 
                 <div class="compare-box">
@@ -134,6 +135,19 @@
                 <div class="fanart-panel panel">
                     <div id="ma-pagination" class="pagination-controls"></div>
                     <div id="ma-grid" class="logo-grid"></div>
+                </div>
+            </div>
+
+            <div id="tadb-controls" class="hidden panel">
+                <div class="controls panel" style="grid-template-columns: 1fr; gap: 15px; margin-top: 0; padding: 18px;">
+                    <div>
+                        <p style="font-size:12px; opacity:0.7; margin:0 0 10px;">Select a logo below, then use the <strong>fanart.tv</strong> tab to adjust image tools before saving.</p>
+                        <button onclick="save()" style="width:100%; background:var(--state-success); color:white;">save logo</button>
+                    </div>
+                </div>
+                <div class="fanart-panel panel">
+                    <div id="tadb-pagination" class="pagination-controls"></div>
+                    <div id="tadb-grid" class="logo-grid"></div>
                 </div>
             </div>
 
