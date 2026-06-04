@@ -181,7 +181,7 @@ def get_theaudiodb_images(artist_obj):
     if not mbid:
         return []
     try:
-        url = f"https://www.theaudiodb.com/api/v1/json/2/artist-mb.php?i={mbid}"
+        url = f"https://www.theaudiodb.com/api/v1/json/123/artist-mb.php?i={mbid}"
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         artists = r.json().get('artists') or []
