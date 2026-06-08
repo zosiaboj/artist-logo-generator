@@ -64,15 +64,36 @@ _CJK_FONTS = {'Noto Sans SC', 'Noto Serif SC', 'Noto Sans JP', 'Noto Serif JP', 
 
 _MODERN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-_cjk_char_cache = {}          # chars_key → font_path
+_cjk_char_cache = {}          # (family, chars) → font_path
 _cjk_cache_lock = __import__('threading').Lock()
+
+# Noto Sans SC (Source Han Sans) bundles Latin/Cyrillic/CJK/Hangul/Kana glyphs,
+# but scripts like Arabic, Hebrew and Devanagari live in their own Noto families —
+# requesting a Noto Sans SC subset for those code points returns a font with no
+# matching glyphs, which renders as tofu boxes. Route each script to its family.
+_NONLATIN_SCRIPT_FONTS = (
+    (0x0600, 0x06FF, 'Noto Sans Arabic'),
+    (0x0590, 0x05FF, 'Noto Sans Hebrew'),
+    (0x0900, 0x097F, 'Noto Sans Devanagari'),
+)
+_DEFAULT_NONLATIN_FONT = 'Noto Sans SC'
+
+def _font_family_for_chars(chars):
+    """Picks the Noto family that actually contains glyphs for these characters."""
+    for char in chars:
+        cp = ord(char)
+        for lo, hi, family in _NONLATIN_SCRIPT_FONTS:
+            if lo <= cp <= hi:
+                return family
+    return _DEFAULT_NONLATIN_FONT
 
 def get_cjk_font_for_text(text):
     """Return a TTF covering the non-Latin characters in text.
 
     Uses Google Fonts CSS2 text= subsetting to download only the specific glyphs
-    needed, converting woff2→TTF in-memory with fonttools. Result is cached by
-    the frozenset of non-Latin characters in the text.
+    needed, converting woff2→TTF in-memory with fonttools. The Noto family is
+    chosen per-script (see _NONLATIN_SCRIPT_FONTS) since not every script is
+    covered by Noto Sans SC. Result is cached by (family, characters).
     """
     try:
         from fontTools.ttLib import TTFont
@@ -83,14 +104,17 @@ def get_cjk_font_for_text(text):
     if not cjk_chars:
         return None
 
+    family = _font_family_for_chars(cjk_chars)
+    cache_key = (family, cjk_chars)
+
     with _cjk_cache_lock:
-        cached = _cjk_char_cache.get(cjk_chars)
+        cached = _cjk_char_cache.get(cache_key)
         if cached and os.path.exists(cached):
             return cached
 
     from urllib.parse import quote
     import hashlib
-    css_url = (f"https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400"
+    css_url = (f"https://fonts.googleapis.com/css2?family={quote(family)}:wght@400"
                f"&text={quote(cjk_chars)}")
     try:
         css = requests.get(css_url, headers={"User-Agent": _MODERN_UA}, timeout=15).text
@@ -99,25 +123,25 @@ def get_cjk_font_for_text(text):
         if not woff2_urls:
             woff2_urls = re.findall(r'url\(([^)]+\.woff2[^)]*)\)', css)
         if not woff2_urls:
-            print(f"No woff2 URL for CJK chars {cjk_chars!r}")
+            print(f"No woff2 URL for {family} chars {cjk_chars!r}")
             return None
 
-        char_hash = hashlib.md5(cjk_chars.encode()).hexdigest()[:10]
-        font_path = os.path.join(logic.FONT_DIR, f'cjk_subset_{char_hash}.ttf')
+        char_hash = hashlib.md5(f'{family}:{cjk_chars}'.encode()).hexdigest()[:10]
+        font_path = os.path.join(logic.FONT_DIR, f'nonlatin_subset_{char_hash}.ttf')
 
         if not os.path.exists(font_path):
             r = requests.get(woff2_urls[0], timeout=30)
             r.raise_for_status()
             os.makedirs(logic.FONT_DIR, exist_ok=True)
             TTFont(BytesIO(r.content)).save(font_path)
-            print(f"CJK subset for {cjk_chars!r} → {font_path} ({os.path.getsize(font_path)//1024} KB)")
+            print(f"{family} subset for {cjk_chars!r} → {font_path} ({os.path.getsize(font_path)//1024} KB)")
 
         with _cjk_cache_lock:
-            _cjk_char_cache[cjk_chars] = font_path
+            _cjk_char_cache[cache_key] = font_path
         return font_path
 
     except Exception as e:
-        print(f"CJK font download failed for {cjk_chars!r}: {e}")
+        print(f"{family} font download failed for {cjk_chars!r}: {e}")
         return None
 
 def download_font_if_needed(font_name):

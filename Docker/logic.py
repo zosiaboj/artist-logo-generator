@@ -140,18 +140,20 @@ def generate_text_logo(text, font_path, fallback_font_path=None, rows=1, color="
     wpl = (n + int(rows) - 1) // int(rows)
     lines = [" ".join(words[i : i + wpl]) for i in range(0, n, wpl)]
 
+    # Raqm shapes joining scripts (Arabic, Hebrew) and reorders bidi text correctly;
+    # the basic layout engine draws each codepoint in isolation, left-to-right only.
     try:
-        font = ImageFont.truetype(font_path, 400, encoding='utf-8')
+        font = ImageFont.truetype(font_path, 400, encoding='utf-8', layout_engine=ImageFont.Layout.RAQM)
     except:
         try:
-            font = ImageFont.truetype(font_path, 400)
+            font = ImageFont.truetype(font_path, 400, layout_engine=ImageFont.Layout.RAQM)
         except:
             font = ImageFont.load_default()
 
     fallback_font = None
     if fallback_font_path:
         try:
-            fallback_font = ImageFont.truetype(fallback_font_path, 400)
+            fallback_font = ImageFont.truetype(fallback_font_path, 400, layout_engine=ImageFont.Layout.RAQM)
         except Exception:
             pass
 
