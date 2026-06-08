@@ -1,4 +1,4 @@
-import os, base64, re, requests, json
+import os, base64, re, requests, json, time
 from io import BytesIO
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file
@@ -38,11 +38,22 @@ def load_default_fonts():
 
 DEFAULT_FONTS = load_default_fonts()
 
+_ARTIST_CACHE_TTL = 60  # seconds
+_artist_cache = None
+_artist_cache_time = 0.0
+
+def _get_sorted_artists(force_refresh=False):
+    global _artist_cache, _artist_cache_time
+    if not force_refresh and _artist_cache is not None and (time.time() - _artist_cache_time) < _ARTIST_CACHE_TTL:
+        return _artist_cache
+    lib = plex_utils.get_library(os.environ.get('LIBRARY_NAME', 'Music'))
+    _artist_cache = sorted(lib.all(), key=lambda x: re.sub(r'^(the|a|an)\s+', '', x.title.lower()))
+    _artist_cache_time = time.time()
+    return _artist_cache
+
 @app.route('/')
 def index():
-    lib = plex_utils.get_library(os.environ.get('LIBRARY_NAME', 'Music'))
-    artists = sorted(lib.all(), key=lambda x: re.sub(r'^(the|a|an)\s+', '', x.title.lower()))
-    
+    artists = _get_sorted_artists(force_refresh='refresh' in request.args)
     data = []
     for a in artists:
         path = plex_utils.get_artist_path(a.title)

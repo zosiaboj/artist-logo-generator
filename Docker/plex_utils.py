@@ -3,6 +3,7 @@ import time
 import requests
 import re
 import pathlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 from plexapi.server import PlexServer
 
@@ -153,11 +154,10 @@ def get_metal_archives_logos(artist_obj):
     if not ma_urls:
         return []
 
-    logos = []
-    for ma_url in ma_urls:
+    def _probe_band(ma_url):
         match = re.search(r'/bands/[^/]+/(\d+)', ma_url)
         if not match:
-            continue
+            return None
         band_id = match.group(1)
         shard = "/".join(list(band_id[:4]))
         base = f"https://www.metal-archives.com/images/{shard}/{band_id}_logo"
@@ -166,10 +166,18 @@ def get_metal_archives_logos(artist_obj):
             try:
                 r = requests.head(url, headers=_MA_HEADERS, timeout=5)
                 if r.status_code == 200:
-                    logos.append(url)
-                    break
+                    return url
             except requests.RequestException:
                 pass
+        return None
+
+    logos = []
+    with ThreadPoolExecutor(max_workers=min(len(ma_urls), 8)) as pool:
+        futures = {pool.submit(_probe_band, u): u for u in ma_urls}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                logos.append(result)
     return logos
 
 
