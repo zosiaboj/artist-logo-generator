@@ -882,27 +882,66 @@ async function saveCustom() {
   }
 }
 
+let _bulkAbortController = null;
+
+function abortBulkApply() {
+    if (_bulkAbortController) _bulkAbortController.abort();
+}
+
 async function applyMostPopularFanart() {
     const artists = Array.from(selectedArtists);
     if (artists.length === 0) {
         return showToast("No artists selected.", "error");
     }
 
-    showToast(`Applying most popular logo to ${artists.length} artists...`);
+    const progressEl = document.getElementById('bulk-progress');
+    const barEl = document.getElementById('bulk-progress-bar');
+    const labelEl = document.getElementById('bulk-progress-label');
 
-    const res = await fetch('/bulk_apply_fanart', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ artist_keys: artists }),
-    });
+    _bulkAbortController = new AbortController();
+    progressEl.classList.remove('hidden');
+    barEl.style.width = '0%';
+    labelEl.textContent = `0 / ${artists.length}`;
 
-    const data = await res.json();
-    if (data.status === 'success') {
-        showToast(`Successfully updated ${data.updated_count} artists.`);
-        // Refresh status dots for updated artists
-        artists.forEach(key => updateStatus(key, 'done'));
-    } else {
-        showToast("An error occurred during bulk update.", "error");
+    try {
+        const res = await fetch('/bulk_apply_fanart', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ artist_keys: artists }),
+            signal: _bulkAbortController.signal,
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const event = JSON.parse(line.slice(6));
+                const pct = event.total > 0 ? (event.done / event.total) * 100 : 0;
+                barEl.style.width = `${pct}%`;
+                labelEl.textContent = `${event.done} / ${event.total}`;
+                if (event.complete) {
+                    (event.updated_keys || []).forEach(key => updateStatus(key, 'done'));
+                    showToast(`Updated ${event.updated_keys.length} of ${event.total} artists.`);
+                }
+            }
+        }
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            showToast("Bulk apply aborted.", "error");
+        } else {
+            showToast("An error occurred during bulk update.", "error");
+        }
+    } finally {
+        _bulkAbortController = null;
+        progressEl.classList.add('hidden');
     }
 }
 

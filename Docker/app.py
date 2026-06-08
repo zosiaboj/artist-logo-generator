@@ -1,7 +1,7 @@
 import os, base64, re, requests, json, time
 from io import BytesIO
 from urllib.parse import urlparse
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from PIL import ImageFont
@@ -436,38 +436,51 @@ def toggle_status(rating_key):
 def bulk_apply_fanart():
     data = request.json or {}
     artist_keys = data.get('artist_keys', [])
-    updated_count = 0
+    total = len(artist_keys)
 
-    for key in artist_keys:
-        try:
-            artist = plex_utils.fetch_artist(key)
-            logos = plex_utils.get_fanart_logos(artist)
+    def _first_valid_url(urls):
+        for url in urls:
+            hostname = urlparse(url).hostname
+            if hostname in _ALLOWED_PROXY_HOSTS:
+                return url
+            print(f"bulk_apply_fanart blocked unexpected host: {hostname}")
+        return None
 
-            if logos:
-                most_popular_logo_url = logos[0]
+    def generate():
+        updated_keys = []
+        for i, key in enumerate(artist_keys):
+            try:
+                artist = plex_utils.fetch_artist(key)
 
-                # Apply same domain allowlist as proxy_image to prevent SSRF via fanart.tv response
-                parsed_logo = urlparse(most_popular_logo_url)
-                if parsed_logo.hostname not in _ALLOWED_PROXY_HOSTS:
-                    print(f"bulk_apply_fanart blocked unexpected host: {parsed_logo.hostname}")
-                    continue
+                logo_url = (
+                    _first_valid_url(plex_utils.get_fanart_logos(artist))
+                    or _first_valid_url(plex_utils.get_theaudiodb_images(artist))
+                    or _first_valid_url(plex_utils.get_metal_archives_logos(artist))
+                )
 
-                img = logic.Image.open(BytesIO(requests.get(most_popular_logo_url, timeout=20).content))
-                final = logic.apply_transforms(img, apply_default_size=True) # Using default sizing
-                
-                path = plex_utils.get_artist_path(artist.title)
-                os.makedirs(path, exist_ok=True)
-                final.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
-                
-                if os.environ.get('UPDATE_PLEX', 'false').lower() == 'true':
-                    artist.uploadPoster(filepath=os.path.join(path, "artist.jpg"))
-                
-                updated_count += 1
-        except Exception as e:
-            print(f"Error updating artist {key}: {e}")
-            continue
-            
-    return jsonify({"status": "success", "updated_count": updated_count})
+                if logo_url:
+                    img = logic.Image.open(BytesIO(requests.get(logo_url, timeout=20).content))
+                    final = logic.apply_transforms(img, apply_default_size=True)
+
+                    path = plex_utils.get_artist_path(artist.title)
+                    os.makedirs(path, exist_ok=True)
+                    final.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
+
+                    with open(os.path.join(path, '.status'), 'w') as f:
+                        f.write('done')
+
+                    if os.environ.get('UPDATE_PLEX', 'false').lower() == 'true':
+                        artist.uploadPoster(filepath=os.path.join(path, "artist.jpg"))
+
+                    updated_keys.append(key)
+            except Exception as e:
+                print(f"Error updating artist {key}: {e}")
+
+            yield f"data: {json.dumps({'done': i + 1, 'total': total})}\n\n"
+
+        yield f"data: {json.dumps({'done': total, 'total': total, 'updated_keys': updated_keys, 'complete': True})}\n\n"
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 @app.route('/bulk_toggle_status', methods=['POST'])
 def bulk_toggle_status():

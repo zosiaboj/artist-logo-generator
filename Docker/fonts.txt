@@ -54,6 +54,10 @@ Special Elite
 # Other
 Bitcount Grid Double Ink
 Uncial Antiqua
+Almendra
+Almendra Display
+IM Fell English
+Bodoni Moda SC
 
 # CJK (Chinese / Japanese / Korean)
 # Non-Latin characters in any artist name automatically render with Noto Sans SC
