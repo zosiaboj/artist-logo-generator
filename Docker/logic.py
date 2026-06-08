@@ -70,7 +70,10 @@ def apply_transforms(img, apply_default_size=True, invert=False, make_white=Fals
         alpha = img.getchannel('A')
         img = Image.new("RGBA", img.size, (255, 255, 255, 255))
         img.putalpha(alpha)
-    if monochrome: img = img.convert("L").convert("RGBA")
+    if monochrome:
+        r, g, b, a = img.split()
+        gray = Image.merge('RGB', (r, g, b)).convert('L').convert('RGB')
+        img = Image.merge('RGBA', (*gray.split(), a))
     if invert:
         r, g, b, a = img.split()
         img = Image.merge('RGBA', (*ImageOps.invert(Image.merge('RGB', (r, g, b))).split(), a))
