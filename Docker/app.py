@@ -23,6 +23,8 @@ _ALLOWED_PROXY_HOSTS = {'assets.fanart.tv', 'www.metal-archives.com', 'r2.theaud
 # Allowlist for Content-Type headers forwarded to the browser
 _ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 
+_REMBG_ENABLED = os.environ.get('REMBG_ENABLED', '').lower() == 'true'
+
 def load_default_fonts():
     """Loads default fonts from fonts.txt, with a fallback list."""
     try:
@@ -63,7 +65,7 @@ def index():
             with open(status_file, 'r') as f:
                 status = f.read().strip()
         data.append({'obj': a, 'status': status})
-    return render_template('index.html', artists=data, fonts=DEFAULT_FONTS)
+    return render_template('index.html', artists=data, fonts=DEFAULT_FONTS, rembg_enabled=_REMBG_ENABLED)
 
 _ALLOWED_FONT_EXTENSIONS = {'.ttf', '.otf', '.woff', '.woff2'}
 
@@ -575,10 +577,53 @@ def plex_proxy(rating_key):
         print(f"plex_proxy error: {e}")
         return jsonify({'status': 'error', 'message': 'Failed to fetch artist image'}), 500
 
+@app.route('/remove_bg', methods=['POST'])
+def remove_bg():
+    if not _REMBG_ENABLED:
+        return jsonify({'status': 'error', 'message': 'Background removal not enabled'}), 403
+    data = request.json or {}
+    data_url = data.get('data_url', '')
+    if not data_url.startswith('data:image'):
+        return jsonify({'status': 'error', 'message': 'Invalid image data'}), 400
+    try:
+        img_bytes = base64.b64decode(data_url.split(',', 1)[1])
+    except Exception:
+        return jsonify({'status': 'error', 'message': 'Could not decode image'}), 400
+
+    method = data.get('method', 'rembg')
+    try:
+        if method == 'rembg':
+            from rembg import remove
+            result_bytes = remove(img_bytes)
+        else:
+            color = data.get('color', '#ffffff')
+            if not re.match(r'^#[0-9a-fA-F]{6}$', color):
+                color = '#ffffff'
+            threshold = min(max(int(data.get('threshold', 30)), 1), 150)
+            result_bytes = logic.remove_solid_bg(img_bytes, color, threshold)
+    except Exception as e:
+        print(f"remove_bg error: {e}")
+        return jsonify({'status': 'error', 'message': 'Background removal failed'}), 500
+
+    b64 = base64.b64encode(result_bytes).decode()
+    return jsonify({'data_url': f'data:image/png;base64,{b64}'})
+
 if __name__ == '__main__':
     print("Downloading all fonts listed in fonts.txt...")
     for font in DEFAULT_FONTS:
         download_font_if_needed(font)
     print("Font download process finished.")
+    if _REMBG_ENABLED:
+        print("Warming up rembg model (this may download ~175 MB on first run)...")
+        try:
+            from rembg import remove as _rembg_remove
+            from io import BytesIO as _BytesIO
+            from PIL import Image as _PILImage
+            _buf = _BytesIO()
+            _PILImage.new('RGB', (1, 1)).save(_buf, 'PNG')
+            _rembg_remove(_buf.getvalue())
+            print("rembg model ready.")
+        except Exception as e:
+            print(f"rembg warmup failed: {e}")
     # CJK subset fonts are downloaded lazily on first preview/save request.
     app.run(host='0.0.0.0', port=5000)

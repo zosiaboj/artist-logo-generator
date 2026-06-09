@@ -128,6 +128,19 @@ def apply_transforms(img, apply_default_size=True, invert=False, make_white=Fals
 
     return final
 
+def remove_solid_bg(img_bytes, color_hex, threshold=30):
+    import numpy as np
+    img = Image.open(BytesIO(img_bytes)).convert('RGBA')
+    arr = np.array(img)
+    r = int(color_hex[1:3], 16)
+    g = int(color_hex[3:5], 16)
+    b = int(color_hex[5:7], 16)
+    diff = np.abs(arr[:, :, :3].astype(int) - [r, g, b]).sum(axis=2)
+    arr[:, :, 3] = np.where(diff < threshold * 3, 0, arr[:, :, 3])
+    buf = BytesIO()
+    Image.fromarray(arr).save(buf, 'PNG')
+    return buf.getvalue()
+
 def generate_text_logo(text, font_path, fallback_font_path=None, rows=1, color="white", case="none"):
     if isinstance(text, bytes):
         text = text.decode('utf-8')

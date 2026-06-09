@@ -90,6 +90,7 @@ function resetFilters() {
   document.getElementById("contrast").value = 1.0;
   document.getElementById('btn-invert').classList.remove('active');
   document.getElementById('btn-monochrome').classList.remove('active');
+  if (typeof clearBgUndo === 'function') clearBgUndo();
   
   const applyDefaultSizeCheckbox = document.getElementById("apply-default-size");
   applyDefaultSizeCheckbox.checked = true;

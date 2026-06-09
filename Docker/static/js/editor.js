@@ -5,6 +5,25 @@
 let currentKey = "";
 let selectedUrl = "";
 let currentCase = "none";
+const bgUndoStack = [];
+
+function pushBgUndo() {
+    bgUndoStack.push(selectedUrl);
+    const btn = document.getElementById('btn-bg-undo');
+    if (btn) btn.disabled = false;
+}
+
+function applyBgResult(dataUrl) {
+    pushBgUndo();
+    selectedUrl = dataUrl;
+    document.getElementById('preview-img').src = selectedUrl;
+}
+
+function clearBgUndo() {
+    bgUndoStack.length = 0;
+    const btn = document.getElementById('btn-bg-undo');
+    if (btn) btn.disabled = true;
+}
 let selectedColor = "#FFFFFF";
 let selectedFont = "Roboto"; // Default font
 let selectedImageColor = null;
@@ -135,6 +154,91 @@ function setupEventListeners() {
             updateCSS();
         });
     }
+
+    // Background removal buttons (only present when REMBG_ENABLED=true)
+    const rembgBtn = document.getElementById('btn-rembg');
+    if (rembgBtn) {
+        rembgBtn.addEventListener('click', async () => {
+            if (!selectedUrl) return;
+            const label = rembgBtn.textContent;
+            rembgBtn.textContent = 'Working…';
+            rembgBtn.disabled = true;
+            try {
+                const res = await fetch('/remove_bg', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({method: 'rembg', data_url: selectedUrl})
+                });
+                const json = await res.json();
+                if (json.data_url) applyBgResult(json.data_url);
+                else showToast(json.message || 'Remove BG failed', 'error');
+            } catch (e) {
+                showToast('Remove BG failed', 'error');
+            } finally {
+                rembgBtn.textContent = label;
+                rembgBtn.disabled = false;
+            }
+        });
+    }
+
+    const colorBgBtn = document.getElementById('btn-remove-color-bg');
+    if (colorBgBtn) {
+        colorBgBtn.addEventListener('click', () => {
+            const controls = document.getElementById('bg-color-controls');
+            controls.style.display = controls.style.display === 'none' ? '' : 'none';
+        });
+        document.getElementById('bg-threshold').addEventListener('input', e => {
+            document.getElementById('bg-threshold-val').textContent = e.target.value;
+        });
+    }
+
+    document.getElementById('btn-apply-color-bg')?.addEventListener('click', async () => {
+        if (!selectedUrl) return;
+        const color = document.getElementById('bg-target-color').value;
+        const threshold = document.getElementById('bg-threshold').value;
+        try {
+            const res = await fetch('/remove_bg', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({method: 'color', data_url: selectedUrl, color, threshold})
+            });
+            const json = await res.json();
+            if (json.data_url) applyBgResult(json.data_url);
+            else showToast(json.message || 'Colour removal failed', 'error');
+        } catch (e) {
+            showToast('Colour removal failed', 'error');
+        }
+    });
+
+    document.getElementById('btn-eyedropper')?.addEventListener('click', () => {
+        const hint = document.getElementById('eyedropper-hint');
+        const img = document.getElementById('preview-img');
+        hint.style.display = '';
+        img.style.cursor = 'crosshair';
+        img.addEventListener('click', function pickColour(e) {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            const rect = img.getBoundingClientRect();
+            const x = Math.floor((e.clientX - rect.left) * canvas.width / rect.width);
+            const y = Math.floor((e.clientY - rect.top) * canvas.height / rect.height);
+            const [r, g, b] = canvas.getContext('2d').getImageData(x, y, 1, 1).data;
+            document.getElementById('bg-target-color').value =
+                '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+            img.style.cursor = '';
+            hint.style.display = 'none';
+            img.removeEventListener('click', pickColour);
+        }, {once: true});
+    });
+
+    document.getElementById('btn-bg-undo')?.addEventListener('click', () => {
+        if (!bgUndoStack.length) return;
+        selectedUrl = bgUndoStack.pop();
+        document.getElementById('preview-img').src = selectedUrl;
+        const btn = document.getElementById('btn-bg-undo');
+        if (btn) btn.disabled = bgUndoStack.length === 0;
+    });
 
     // Restore clickable status-dot toggles via event delegation (works even if inline onclick is missing)
     const artistListEl = document.getElementById('artist-list');
