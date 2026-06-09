@@ -11,6 +11,7 @@ services:
       - LIBRARY_NAME=Music
       - FANART_API_KEY=${FANART_API_KEY}
       - UPDATE_PLEX=${UPDATE_PLEX:-true}
+      - REMBG_ENABLED=${REMBG_ENABLED:-false}
     volumes:
       - ./Docker/fonts.txt:/app/fonts.txt
       - fonts:/app/fonts
