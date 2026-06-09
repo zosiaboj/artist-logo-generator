@@ -26,6 +26,7 @@ function clearBgUndo() {
 }
 let selectedColor = "#FFFFFF";
 let selectedFont = "Roboto"; // Default font
+let previewAbortController = null;
 let selectedImageColor = null;
 let lastChecked = null;
 let selectedArtists = new Set();
@@ -988,21 +989,28 @@ function setCase(c) {
 
 async function previewCustom() {
   if (!currentKey) return;
-  const res = await fetch("/preview_text", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      rating_key: currentKey,
-      font: selectedFont,
-      rows: document.getElementById("row-count").value,
-      color: selectedColor,
-      case: currentCase,
-    }),
-  });
-  const data = await res.json();
-  selectedUrl = "data:image/jpeg;base64," + data.image;
-  document.getElementById("preview-img").src = selectedUrl;
-  resetFilters();
+  if (previewAbortController) previewAbortController.abort();
+  previewAbortController = new AbortController();
+  try {
+    const res = await fetch("/preview_text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: previewAbortController.signal,
+      body: JSON.stringify({
+        rating_key: currentKey,
+        font: selectedFont,
+        rows: document.getElementById("row-count").value,
+        color: selectedColor,
+        case: currentCase,
+      }),
+    });
+    const data = await res.json();
+    selectedUrl = "data:image/jpeg;base64," + data.image;
+    document.getElementById("preview-img").src = selectedUrl;
+    resetFilters();
+  } catch (e) {
+    if (e.name !== "AbortError") throw e;
+  }
 }
 
 async function saveCustom() {
