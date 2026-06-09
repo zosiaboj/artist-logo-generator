@@ -590,11 +590,30 @@ def remove_bg():
     except Exception:
         return jsonify({'status': 'error', 'message': 'Could not decode image'}), 400
 
+    _ALLOWED_REMBG_MODELS = {'u2net', 'u2netp', 'isnet-general-use', 'birefnet-general-lite', 'birefnet-general'}
+
     method = data.get('method', 'rembg')
     try:
         if method == 'rembg':
-            from rembg import remove
-            result_bytes = remove(img_bytes)
+            import numpy as np
+            from PIL import Image as _Img
+            from io import BytesIO as _BIO
+            from rembg import remove, new_session
+            model = data.get('model', 'u2net')
+            if model not in _ALLOWED_REMBG_MODELS:
+                model = 'u2net'
+            session = new_session(model)
+            result_bytes = remove(img_bytes, session=session)
+
+            # Post-processing
+            if data.get('sharpen_alpha') or data.get('remove_interior'):
+                arr = np.array(_Img.open(_BIO(result_bytes)).convert('RGBA'))
+                if data.get('remove_interior'):
+                    brightness_threshold = min(max(int(data.get('interior_threshold', 40)), 5), 120)
+                    arr = logic.postprocess_remove_dark_interior(arr, brightness_threshold)
+                if data.get('sharpen_alpha'):
+                    arr = logic.postprocess_alpha_sharpen(arr)
+                result_bytes = logic._arr_to_png(arr)
         else:
             color = data.get('color', '#ffffff')
             if not re.match(r'^#[0-9a-fA-F]{6}$', color):

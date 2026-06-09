@@ -156,6 +156,15 @@ function setupEventListeners() {
     }
 
     // Background removal buttons (only present when REMBG_ENABLED=true)
+    // Interior threshold slider visibility
+    document.getElementById('rembg-remove-interior')?.addEventListener('change', e => {
+        const row = document.getElementById('interior-threshold-row');
+        if (row) row.style.display = e.target.checked ? '' : 'none';
+    });
+    document.getElementById('rembg-interior-threshold')?.addEventListener('input', e => {
+        document.getElementById('interior-threshold-val').textContent = e.target.value;
+    });
+
     const rembgBtn = document.getElementById('btn-rembg');
     if (rembgBtn) {
         rembgBtn.addEventListener('click', async () => {
@@ -164,10 +173,21 @@ function setupEventListeners() {
             rembgBtn.textContent = 'Working…';
             rembgBtn.disabled = true;
             try {
+                const model = document.getElementById('rembg-model')?.value || 'u2net';
+                const sharpenAlpha = document.getElementById('rembg-sharpen-alpha')?.checked || false;
+                const removeInterior = document.getElementById('rembg-remove-interior')?.checked || false;
+                const interiorThreshold = parseInt(document.getElementById('rembg-interior-threshold')?.value || '40');
                 const res = await fetch('/remove_bg', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({method: 'rembg', data_url: selectedUrl})
+                    body: JSON.stringify({
+                        method: 'rembg',
+                        data_url: selectedUrl,
+                        model,
+                        sharpen_alpha: sharpenAlpha,
+                        remove_interior: removeInterior,
+                        interior_threshold: interiorThreshold,
+                    })
                 });
                 const json = await res.json();
                 if (json.data_url) applyBgResult(json.data_url);

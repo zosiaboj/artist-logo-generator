@@ -128,6 +128,42 @@ def apply_transforms(img, apply_default_size=True, invert=False, make_white=Fals
 
     return final
 
+def _arr_to_png(arr):
+    import numpy as np
+    buf = BytesIO()
+    Image.fromarray(arr).save(buf, 'PNG')
+    return buf.getvalue()
+
+def postprocess_alpha_sharpen(arr):
+    """Tighten feathered alpha edges using unsharp mask."""
+    import numpy as np
+    from PIL import ImageFilter
+    alpha = Image.fromarray(arr[:, :, 3], 'L')
+    sharpened = alpha.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=3))
+    out = arr.copy()
+    out[:, :, 3] = np.array(sharpened)
+    return out
+
+def postprocess_remove_dark_interior(arr, brightness_threshold=40):
+    """Make enclosed dark opaque pixel regions (e.g. inside letter holes) transparent."""
+    import numpy as np
+    from scipy import ndimage
+    alpha = arr[:, :, 3]
+    brightness = arr[:, :, :3].astype(int).mean(axis=2)
+    dark_opaque = (alpha >= 128) & (brightness < brightness_threshold)
+    if not dark_opaque.any():
+        return arr
+    labeled, n = ndimage.label(dark_opaque)
+    border_labels = set()
+    for edge in (labeled[0, :], labeled[-1, :], labeled[:, 0], labeled[:, -1]):
+        border_labels.update(edge.tolist())
+    border_labels.discard(0)
+    out = arr.copy()
+    # Remove enclosed regions (not touching border); also remove border-touching dark
+    # remnants since after rembg the outer border should be fully transparent already
+    out[dark_opaque, 3] = 0
+    return out
+
 def remove_solid_bg(img_bytes, color_hex, threshold=30):
     import numpy as np
     img = Image.open(BytesIO(img_bytes)).convert('RGBA')
