@@ -260,6 +260,27 @@ function setupEventListeners() {
         if (btn) btn.disabled = bgUndoStack.length === 0;
     });
 
+    // Preview image popup
+    function openPreviewPopup() {
+        if (!selectedUrl) return;
+        const popup = document.getElementById('preview-popup');
+        const img = document.getElementById('preview-popup-img');
+        if (!popup || !img) return;
+        img.src = selectedUrl;
+        popup.classList.remove('hidden');
+    }
+    function closePreviewPopup() {
+        const popup = document.getElementById('preview-popup');
+        const img = document.getElementById('preview-popup-img');
+        if (popup) popup.classList.add('hidden');
+        if (img) img.src = '';
+    }
+    document.getElementById('preview-img')?.addEventListener('click', openPreviewPopup);
+    document.getElementById('preview-popup-close')?.addEventListener('click', closePreviewPopup);
+    document.getElementById('preview-popup')?.addEventListener('click', e => {
+        if (e.target === document.getElementById('preview-popup')) closePreviewPopup();
+    });
+
     // Restore clickable status-dot toggles via event delegation (works even if inline onclick is missing)
     const artistListEl = document.getElementById('artist-list');
     if (artistListEl) {
