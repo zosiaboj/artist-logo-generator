@@ -64,18 +64,18 @@
                 </div>
 
                 <div class="compare-box">
-                    <div>
-                            <div class="img-container"><img id="plex-img" src=""/><span id="plex-img-empty" class="img-empty" hidden>No poster in Plex</span></div>
-                            <div style="font-size:11px; margin-top:8px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Current</div>
-                            <div style="text-align:center; margin-top:6px;"><button id="revert-btn" class="btn" hidden onclick="revertPoster()" title="Restore the poster Plex had before this app first changed it">Revert to original</button></div>
+                    <div class="compare-col">
+                        <div class="img-container"><img id="plex-img" src=""/><span id="plex-img-empty" class="img-empty" hidden>No poster in Plex</span></div>
+                        <div class="img-label">Current</div>
+                        <button id="revert-btn" class="btn" hidden onclick="revertPoster()" title="Restore the poster Plex had before this app first changed it">Revert to original</button>
+                    </div>
+                    <div class="compare-col">
+                        <div class="img-container" id="preview-container">
+                            <div id="preview-overlay" class="preview-overlay"></div>
+                            <img id="preview-img" src=""/>
                         </div>
-                        <div>
-                            <div class="img-container" id="preview-container">
-                                <div id="preview-overlay" class="preview-overlay"></div>
-                                <img id="preview-img" src=""/>
-                            </div>
-                            <div style="font-size:11px; margin-top:8px; text-transform: uppercase; letter-spacing: 1px; text-align:center;">Preview</div>
-                        </div>
+                        <div class="img-label">Preview</div>
+                    </div>
                 </div>
             </div>
 
@@ -97,101 +97,79 @@
                 </div>
             </div>
 
-            <div id="fanart-controls" class="hidden panel">
-                <div class="controls panel" style="grid-template-columns: 1fr; gap: 15px; margin-top: 0; padding: 18px;">
-                    <div class="control-group">
-                        <h4>Image Tools</h4>
-                        <div style="display:flex; gap:10px; flex-wrap: wrap; margin-bottom:10px;">
-                            <button id="btn-invert" class="font-btn">Invert</button>
-                            <button id="btn-monochrome" class="font-btn">Greyscale</button>
-                        </div>
-                        {% if rembg_enabled %}
-                        <h4>Background Removal</h4>
-                        <div style="margin-bottom:8px;">
-                            <label style="font-size:0.85em; opacity:0.7; display:block; margin-bottom:3px;">Model</label>
-                            <select id="rembg-model" style="width:100%; background:var(--controls-bg); color:var(--base-text); border:1px solid var(--border-color); padding:4px 6px; border-radius:4px;">
-                                <option value="u2net">u2net — fast, general</option>
-                                <option value="isnet-general-use">isnet — better edges</option>
-                                <option value="birefnet-general-lite">birefnet-lite — high quality</option>
-                                <option value="birefnet-general">birefnet — best quality</option>
-                            </select>
-                        </div>
-                        <div style="margin-bottom:8px; font-size:0.85em; display:flex; flex-direction:column; gap:4px;">
-                            <label><input type="checkbox" id="rembg-sharpen-alpha"> Sharpen edges</label>
-                            <label><input type="checkbox" id="rembg-remove-interior"> Remove dark interior</label>
-                            <div id="interior-threshold-row" style="display:none; padding-left:16px;">
-                                Brightness: <input type="range" id="rembg-interior-threshold" min="10" max="120" value="40" step="5" style="width:90px;">
-                                <span id="interior-threshold-val">40</span>
+            <div id="image-workspace">
+                    <div class="controls panel tools-panel shared-tools">
+                        <div class="tools-cols">
+                            <div class="control-group tools-col">
+                                <h4>Image Tools</h4>
+                                <div class="btn-row">
+                                    <button id="btn-invert" class="font-btn">Invert</button>
+                                    <button id="btn-monochrome" class="font-btn">Greyscale</button>
+                                </div>
+                                {% if rembg_enabled %}
+                                <h4>Background Removal</h4>
+                                <select id="rembg-model" class="tool-select">
+                                    <option value="u2net">u2net — fast, general</option>
+                                    <option value="isnet-general-use">isnet — better edges</option>
+                                    <option value="birefnet-general-lite">birefnet-lite — high quality</option>
+                                    <option value="birefnet-general">birefnet — best quality</option>
+                                </select>
+                                <div class="check-stack">
+                                    <label><input type="checkbox" id="rembg-sharpen-alpha"> Sharpen edges</label>
+                                    <label><input type="checkbox" id="rembg-remove-interior"> Remove dark interior</label>
+                                    <div id="interior-threshold-row" class="slider-row" style="display:none;">
+                                        <span>Brightness</span> <input type="range" id="rembg-interior-threshold" min="10" max="120" value="40" step="5">
+                                        <span id="interior-threshold-val">40</span>
+                                    </div>
+                                </div>
+                                <div class="btn-row">
+                                    <button id="btn-rembg" class="font-btn">Remove BG</button>
+                                    <button id="btn-remove-color-bg" class="font-btn">Solid Colour BG</button>
+                                    <button id="btn-bg-undo" class="font-btn" disabled>Undo</button>
+                                </div>
+                                <div id="bg-color-controls" style="display:none;">
+                                    <div class="btn-row">
+                                        <label>Colour</label>
+                                        <input type="color" id="bg-target-color" value="#ffffff">
+                                        <button id="btn-eyedropper" class="font-btn" title="Click image to pick colour">&#x1F489;</button>
+                                        <span id="eyedropper-hint" style="display:none; font-size:0.8em; opacity:0.7;">Click image…</span>
+                                    </div>
+                                    <div class="slider-row">
+                                        <span>Tolerance</span> <input type="range" id="bg-threshold" min="5" max="100" value="30" step="5">
+                                        <span id="bg-threshold-val">30</span>
+                                    </div>
+                                    <button id="btn-apply-color-bg" class="font-btn">Apply</button>
+                                </div>
+                                {% endif %}
+                            </div>
+                            <div class="control-group tools-col">
+                                <h4>Colourise</h4>
+                                <div class="color-grid" id="image-color-picker"></div>
+                                <label class="check-line"><input type="checkbox" id="apply-default-size" checked onchange="toggleZoom(this)"> Apply Default Size</label>
+                                <div class="slider-row">
+                                    <span>Zoom</span> <input type="range" id="zoom" min="0.5" max="3" value="1" step="0.1" oninput="updateCSS()" disabled>
+                                </div>
+                                <div class="slider-row">
+                                    <span>Contrast</span> <input type="range" id="contrast" min="0" max="3" value="1" step="0.1" oninput="updateCSS()">
+                                </div>
+                                <div class="btn-row">
+                                    <button class="font-btn" onclick="document.getElementById('manual-upload-2').click()">Upload Image</button>
+                                    <button class="font-btn" onclick="resetFilters()">Reset</button>
+                                </div>
+                                <input type="file" id="manual-upload-2" accept="image/*,.svg" style="display:none" onchange="handleUpload(this)">
                             </div>
                         </div>
-                        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
-                            <button id="btn-rembg" class="font-btn">Remove BG</button>
-                            <button id="btn-remove-color-bg" class="font-btn">Solid Colour BG</button>
-                            <button id="btn-bg-undo" class="font-btn" disabled>Undo</button>
-                        </div>
-                        <div id="bg-color-controls" style="display:none; margin-bottom:10px;">
-                            <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-                                <label style="margin:0;">Colour</label>
-                                <input type="color" id="bg-target-color" value="#ffffff">
-                                <button id="btn-eyedropper" class="font-btn" title="Click image to pick colour" style="padding:4px 8px;">&#x1F489;</button>
-                                <span id="eyedropper-hint" style="display:none; font-size:0.8em; opacity:0.7;">Click image…</span>
-                            </div>
-                            <div style="margin-bottom:6px;">
-                                Tolerance: <input type="range" id="bg-threshold" min="5" max="100" value="30" step="5" style="width:100px;">
-                                <span id="bg-threshold-val">30</span>
-                            </div>
-                            <button id="btn-apply-color-bg" class="font-btn">Apply</button>
-                        </div>
-                        {% endif %}
-                        <h4>Colourise</h4>
-                        <div class="color-grid" id="image-color-picker"></div>
-                        <div style="margin:10px 0;">
-                            <label><input type="checkbox" id="apply-default-size" checked onchange="toggleZoom(this)"> Apply Default Size</label>
-                        </div>
-                        <div style="margin:10px 0;">
-                            Zoom: <input type="range" id="zoom" min="0.5" max="3" value="1" step="0.1" oninput="updateCSS()" disabled>
-                        </div>
-                        <div style="margin:10px 0;">
-                            Contrast: <input type="range" id="contrast" min="0" max="3" value="1" step="0.1" oninput="updateCSS()">
-                        </div>
-                        <div style="display:flex; gap:10px; margin-top:10px;">
-                            <button onclick="document.getElementById('manual-upload-2').click()" style="flex:1">Upload Image</button>
-                            <button onclick="resetFilters()" style="flex:1">Reset</button>
-                        </div>
-                        <input type="file" id="manual-upload-2" accept="image/*,.svg" style="display:none" onchange="handleUpload(this)">
+                        <button class="save-btn" onclick="save()">save logo</button>
                     </div>
-                    <div>
-                        <button onclick="save()" style="width:100%; background:var(--state-success); color:white;">save logo</button>
-                    </div>
-                </div>
-
-                <div class="fanart-panel panel">
+                <div id="fanart-controls" class="hidden panel fanart-panel provider-panel">
                     <div id="fanart-pagination" class="pagination-controls"></div>
                     <div id="options-grid" class="logo-grid"></div>
                 </div>
-            </div>
-
-            <div id="metal-archives-controls" class="hidden panel">
-                <div class="controls panel" style="grid-template-columns: 1fr; gap: 15px; margin-top: 0; padding: 18px;">
-                    <div>
-                        <p style="font-size:12px; opacity:0.7; margin:0 0 10px;">Select a logo below, then use the <strong>fanart.tv</strong> tab to adjust image tools before saving.</p>
-                        <button onclick="save()" style="width:100%; background:var(--state-success); color:white;">save logo</button>
-                    </div>
-                </div>
-                <div class="fanart-panel panel">
+                <div id="metal-archives-controls" class="hidden panel fanart-panel provider-panel">
                     <div id="ma-pagination" class="pagination-controls"></div>
                     <div id="ma-grid" class="logo-grid"></div>
                 </div>
-            </div>
-
-            <div id="tadb-controls" class="hidden panel">
-                <div class="controls panel" style="grid-template-columns: 1fr; gap: 15px; margin-top: 0; padding: 18px;">
-                    <div>
-                        <p style="font-size:12px; opacity:0.7; margin:0 0 10px;">Select a logo below, then use the <strong>fanart.tv</strong> tab to adjust image tools before saving.</p>
-                        <button onclick="save()" style="width:100%; background:var(--state-success); color:white;">save logo</button>
-                    </div>
-                </div>
-                <div class="fanart-panel panel">
+                <div id="tadb-controls" class="hidden panel fanart-panel provider-panel">
                     <div id="tadb-pagination" class="pagination-controls"></div>
                     <div id="tadb-grid" class="logo-grid"></div>
                 </div>

@@ -673,7 +673,7 @@ function renderFanartPage() {
   else if (w >= 500) { cols = 2; rows = 2; }
   else { cols = 1; rows = 1; }
   const pageSize = Math.min(9, cols * rows);
-  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
   const logosToShow = fanartLogos.slice((fanartPage - 1) * pageSize, fanartPage * pageSize);
 
   logosToShow.forEach(u => {
@@ -761,7 +761,7 @@ function renderMAPage() {
   else if (w >= 500) { cols = 2; rows = 2; }
   else { cols = 1; rows = 1; }
   const pageSize = Math.min(9, cols * rows);
-  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
 
   const logosToShow = maLogos.slice((maPage - 1) * pageSize, maPage * pageSize);
   logosToShow.forEach(u => {
@@ -830,7 +830,7 @@ function renderTADBPage() {
   else if (w >= 500) { cols = 2; rows = 2; }
   else { cols = 1; rows = 1; }
   const pageSize = Math.min(9, cols * rows);
-  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
 
   const logosToShow = tadbLogos.slice((tadbPage - 1) * pageSize, tadbPage * pageSize);
   logosToShow.forEach(u => {

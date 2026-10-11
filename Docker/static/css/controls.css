@@ -134,14 +134,12 @@
 
     /* Stack preview content vertically for narrow screens */
     .preview-panel { flex-direction: column; gap: 12px; }
-    .preview-panel .section-buttons { width: 100%; flex-direction: row; justify-content: space-between; }
-    .compare-box { flex-direction: column; gap: 12px; }
+    .compare-box { gap: 12px; }
 
-    /* Fanart controls stack under image tools */
-    #fanart-controls { grid-template-columns: 1fr; }
+    /* Provider grid stacks under image tools */
     /* Stack controls columns so text generator options take full width */
     .controls { grid-template-columns: 1fr; }
-    #fanart-controls > .controls.panel, #fanart-controls > .fanart-panel.panel { padding: 12px; }
+    #image-workspace > .controls.panel, #image-workspace > .provider-panel { padding: 12px; }
 }
 
 /* Make text-generator options stack by default so color swatches can span full width */
@@ -203,21 +201,6 @@
     .rows-and-colors .color-grid { width: 100%; }
 }
 
-/* Fanart pagination buttons */
-#fanart-controls .pagination-btn {
-    padding: 6px 10px;
-    font-size: 0.85em;
-    border-radius: 6px;
-    background: var(--controls-bg);
-    border: 1px solid var(--base-border);
-    color: var(--base-text);
-    cursor: pointer;
-}
-
-#fanart-controls .pagination-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
-}
 
 /* Color swatches used by the color picker */
 .color-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(25px, 1fr)); gap: 10px; margin: 15px 0; }
