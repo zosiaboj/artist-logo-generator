@@ -241,6 +241,66 @@ def _cycle_status(artist):
     return nxt
 
 
+# --- original poster backup -------------------------------------------------
+# Before this app first overwrites an artist's Plex poster, the poster Plex is
+# showing is saved to <artist dir>/original.<ext> (+ original.json). Written once,
+# never overwritten, so "revert" always returns to what was there before us.
+_ORIGINAL_EXTS = {'JPEG': 'jpg', 'PNG': 'png', 'WEBP': 'webp', 'GIF': 'gif'}
+_ORIGINAL_FILE_RE = re.compile(r'^original\.(jpg|png|webp|gif)$')
+
+
+def _plex_updates_enabled():
+    return os.environ.get('UPDATE_PLEX', 'false').lower() == 'true'
+
+
+def ensure_original_backup(artist):
+    """Idempotently back up the poster Plex currently shows. Raises InputError(502) if it can't,
+    so callers abort *before* overwriting anything."""
+    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
+    meta_path = os.path.join(path, 'original.json')
+    if os.path.exists(meta_path):
+        return
+    os.makedirs(path, exist_ok=True)
+    meta = {'backed_up': time.strftime('%Y-%m-%dT%H:%M:%S%z'), 'thumb': artist.thumb,
+            'file': None, 'poster_key': None}
+    thumb_url = plex_utils.resource_to_url(artist.thumb) if artist.thumb else None
+    if thumb_url:
+        try:
+            raw, _ = v.fetch_bytes(thumb_url, plex_utils.is_plex_url, headers_for=_headers_for, timeout=15)
+            img = logic.open_image(raw)
+            fmt = img.format
+            img.close()
+            ext = _ORIGINAL_EXTS.get(fmt)
+            if not ext:
+                raise ValueError(f'unsupported format {fmt}')
+            _atomic_write(os.path.join(path, f'original.{ext}'), raw)
+        except Exception as e:
+            print(f"original poster backup failed for {artist.ratingKey}: {type(e).__name__}")
+            raise InputError('could not back up the current Plex poster — nothing was changed', 502)
+        meta['file'] = f'original.{ext}'
+        try:  # which Plex poster entry was selected, so revert can re-select it instead of re-uploading
+            sel = next((p for p in artist.posters() if p.selected), None)
+            meta['poster_key'] = sel.ratingKey if sel else None
+        except Exception as e:
+            print(f"original poster key lookup failed for {artist.ratingKey}: {type(e).__name__}")
+    # meta last: an interrupted backup is simply retried next time
+    _atomic_write(meta_path, json.dumps(meta).encode())
+
+
+def _read_original(artist):
+    """(meta, image_path) for a backed-up original, or (None, None)."""
+    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
+    try:
+        with open(os.path.join(path, 'original.json')) as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return None, None
+    fname = meta.get('file')
+    if fname and _ORIGINAL_FILE_RE.match(fname) and os.path.exists(os.path.join(path, fname)):
+        return meta, os.path.join(path, fname)
+    return meta, None
+
+
 @app.route('/')
 def index():
     artists = _get_sorted_artists(force_refresh='refresh' in request.args)
@@ -478,6 +538,7 @@ def set_poster():
         print(f"set_poster fetch error: {type(e).__name__}")
         return jsonify({'status': 'error', 'message': 'Failed to fetch image'}), 502
     logic.open_image(raw).close()  # must be a real image within size limits
+    ensure_original_backup(artist)
 
     try:
         import tempfile
@@ -531,6 +592,8 @@ def save():
     img = _image_from_url_field(data.get('url'))
 
     final = logic.apply_transforms(img, **v.transform_params(data))
+    if _plex_updates_enabled():
+        ensure_original_backup(artist)
     path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
     os.makedirs(path, exist_ok=True)
     final.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
@@ -538,7 +601,7 @@ def save():
     with open(os.path.join(path, '.status'), 'w') as f:
         f.write('done')
 
-    if os.environ.get('UPDATE_PLEX', 'false').lower() == 'true': artist.uploadPoster(filepath=os.path.join(path, "artist.jpg"))
+    if _plex_updates_enabled(): artist.uploadPoster(filepath=os.path.join(path, "artist.jpg"))
     return jsonify({"status": "success"})
 
 @app.route('/save_custom', methods=['POST'])
@@ -557,6 +620,8 @@ def save_custom():
     cjk_path = get_cjk_font_for_text(artist.title)
     img = logic.generate_text_logo(artist.title, f_path, fallback_font_path=cjk_path,
                                    **v.text_params(data))
+    if _plex_updates_enabled():
+        ensure_original_backup(artist)
     path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
     os.makedirs(path, exist_ok=True)
     img.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
@@ -564,7 +629,7 @@ def save_custom():
     with open(os.path.join(path, '.status'), 'w') as f:
         f.write('custom')
 
-    if os.environ.get('UPDATE_PLEX', 'false').lower() == 'true': artist.uploadPoster(filepath=os.path.join(path, "artist.jpg"))
+    if _plex_updates_enabled(): artist.uploadPoster(filepath=os.path.join(path, "artist.jpg"))
     return jsonify({"status": "success"})
 
 @app.route('/toggle_status/<rating_key>', methods=['POST'])
@@ -605,6 +670,8 @@ def bulk_apply_fanart():
                     raw, _ = v.fetch_bytes(logo_url, _is_external_allowed)
                     img = logic.open_image(raw)
                     final = logic.apply_transforms(img, apply_default_size=True)
+                    if _plex_updates_enabled():
+                        ensure_original_backup(artist)
 
                     path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
                     os.makedirs(path, exist_ok=True)
@@ -613,7 +680,7 @@ def bulk_apply_fanart():
                     with open(os.path.join(path, '.status'), 'w') as f:
                         f.write('done')
 
-                    if os.environ.get('UPDATE_PLEX', 'false').lower() == 'true':
+                    if _plex_updates_enabled():
                         artist.uploadPoster(filepath=os.path.join(path, "artist.jpg"))
 
                     updated_keys.append(key)
@@ -667,6 +734,49 @@ def preview_text():
     img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
 
     return jsonify({"image": img_str})
+
+@app.route('/original_poster/<rating_key>')
+def original_poster(rating_key):
+    """The poster Plex had before this app first changed it (404 if none was backed up)."""
+    if not v.is_rating_key(rating_key):
+        return 'invalid key', 400
+    artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return 'artist not found', 404
+    meta, img_path = _read_original(artist)
+    if not img_path:
+        return 'no original poster', 404
+    ext = os.path.splitext(img_path)[1].lstrip('.')
+    return send_file(img_path, mimetype='image/jpeg' if ext == 'jpg' else f'image/{ext}')
+
+
+@app.route('/revert_poster/<rating_key>', methods=['POST'])
+def revert_poster(rating_key):
+    artist = _artist(rating_key)
+    meta, img_path = _read_original(artist)
+    if meta is None:
+        raise InputError('no original poster was backed up for this artist', 404)
+    if not img_path:
+        raise InputError('this artist had no poster before it was changed', 409)
+    try:
+        target = None
+        if meta.get('poster_key'):
+            target = next((p for p in artist.posters() if p.ratingKey == meta['poster_key']), None)
+        if target:
+            artist.setPoster(target)   # re-select the original Plex entry
+            method = 'selected'
+        else:
+            artist.uploadPoster(filepath=img_path)  # entry gone (e.g. agent refresh): re-upload the backup
+            method = 'uploaded'
+    except Exception as e:
+        print(f"revert_poster error: {type(e).__name__}")
+        return jsonify({'status': 'error', 'message': 'Failed to restore the original poster in Plex'}), 502
+    # The generated logo no longer matches Plex, so mark the artist as not done.
+    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
+    with open(os.path.join(path, '.status'), 'w') as f:
+        f.write('none')
+    return jsonify({'status': 'success', 'method': method, 'new_status': 'none'})
+
 
 @app.route('/plex_proxy/<rating_key>')
 def plex_proxy(rating_key):

@@ -70,6 +70,7 @@ async function saveFromLightbox() {
     if (data.status === 'success') {
       showToast('Poster set in Plex');
       document.getElementById('plex-img').src = `/plex_proxy/${currentKey}?t=${Date.now()}`;
+      if (typeof refreshRevertButton === 'function') refreshRevertButton(currentKey);
       closeLightbox();
     } else {
       showToast('Failed to set poster: ' + (data.message || 'unknown'), 'error');

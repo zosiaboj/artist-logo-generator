@@ -567,6 +567,7 @@ async function loadArtist(key, name) {
   document.getElementById("current-artist").innerText = name;
   document.getElementById("plex-img").src =
     `/plex_proxy/${key}?t=${Date.now()}`;
+  refreshRevertButton(key);
   // Always show fanart tab when loading a new artist
   EXCLUSIVE_PANELS.forEach(id => {
     const el = document.getElementById(id);
@@ -1046,6 +1047,7 @@ async function saveCustom() {
     updateStatus(currentKey, "custom");
     document.getElementById("plex-img").src =
       `/plex_proxy/${currentKey}?t=${Date.now()}`;
+    refreshRevertButton(currentKey);
   } else {
     showToast(data.message || "Save failed", "error");
   }
@@ -1168,6 +1170,7 @@ async function save() {
     updateStatus(currentKey, "done");
     document.getElementById("plex-img").src =
       `/plex_proxy/${currentKey}?t=${Date.now()}`;
+    refreshRevertButton(currentKey);
   } else {
     showToast(data.message || "Save failed", "error");
   }
@@ -1192,6 +1195,7 @@ async function saveCustom() {
     updateStatus(currentKey, "custom");
     document.getElementById("plex-img").src =
       `/plex_proxy/${currentKey}?t=${Date.now()}`;
+    refreshRevertButton(currentKey);
     } else {
     showToast(data.message || "Save failed", "error");
   }
@@ -1208,6 +1212,35 @@ async function toggleStatus(event, key) {
 }
 
 // --- UTILS ---
+
+// Show "Revert to original" only when a backup of the pre-change Plex poster exists.
+async function refreshRevertButton(key) {
+  const btn = document.getElementById('revert-btn');
+  if (!btn) return;
+  btn.hidden = true;
+  try {
+    const res = await fetch(`/original_poster/${key}`, { method: 'HEAD' });
+    if (key === currentKey) btn.hidden = !res.ok;
+  } catch (e) { /* leave hidden */ }
+}
+
+async function revertPoster() {
+  if (!currentKey) return;
+  if (!confirm('Restore the poster Plex had before this app first changed it?')) return;
+  try {
+    const res = await fetch(`/revert_poster/${currentKey}`, { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'success') {
+      showToast('Original poster restored');
+      updateStatus(currentKey, data.new_status || 'none');
+      document.getElementById('plex-img').src = `/plex_proxy/${currentKey}?t=${Date.now()}`;
+    } else {
+      showToast(data.message || 'Revert failed', 'error');
+    }
+  } catch (e) {
+    showToast('Revert failed', 'error');
+  }
+}
 
 function updateStatus(key, status) {
   const item = document.getElementById(`item-${key}`);

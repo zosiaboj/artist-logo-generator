@@ -252,3 +252,6 @@ button:hover { opacity: 0.9; transform: translateY(-1px); box-shadow: 0 4px 10px
   letter-spacing: 0;
   font-weight: 600;
 }
+
+#revert-btn { font-size: 11px; padding: 4px 10px; }
+#revert-btn[hidden] { display: none; }

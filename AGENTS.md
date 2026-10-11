@@ -22,7 +22,7 @@ No tests, linter, or CI exist. Dependencies are pinned in `Docker/requirements.t
 - Commits use conventional prefixes: `feat:`, `fix:`, `perf:`, `chore:`, `compose:`.
 - Routes take an artist `rating_key` and validate it with `.isdigit()`. Keep that check on new routes.
 - External image fetches are limited to an allowlist (fanart.tv, metal-archives.com). Extend the allowlist rather than bypassing it.
-- Artist state is flat files in `/app/ArtistLogos/<artist_title>/` (`artist.jpg` plus `.status` = `none|custom|done`), stored in the `data` volume.
+- Artist state is flat files in `/app/ArtistLogos/<cleaned title>-<ratingKey>/` (`artist.jpg` plus `.status` = `none|custom|done`), stored in the `data` volume. Before the app first overwrites a Plex poster (`UPDATE_PLEX=true`, or `/set_poster`) it saves the poster Plex shows to `original.<ext>` + `original.json` in that dir (written once, never overwritten; backup failure aborts the change). `POST /revert_poster/<key>` restores it (re-selects the recorded Plex poster entry, else re-uploads the backup); `GET /original_poster/<key>` serves it; the UI shows "Revert to original" when it exists.
 - Output is always 1000×1000 JPEG. `zoom` is ignored when `apply_default_size=True` (bulk apply).
 
 ## Pitfalls
