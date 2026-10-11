@@ -1,4 +1,7 @@
-
+# Generic deployment. Site-specific wiring (reverse proxy labels, external
+# networks, on-demand start, ...) goes in a compose.override.yaml next to this
+# file, which `docker compose` merges automatically. See
+# compose.override.example.yaml.
 services:
   plex-artist-logos:
     build: ./Docker
@@ -31,22 +34,9 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    networks:
-      - default
-      - proxy
-    labels:
-      - "traefik.enable=false"
-      - "sablier.enable=true"
-      - "sablier.group=media-tools"
-      - "sablier.display.name=Artist Logo Generator"
-
 
 volumes:
   fonts:
   data:
   logs:
   rembg_models:
-
-networks:
-  proxy:
-    external: true

@@ -1,5 +1,8 @@
 # Environment variables
 .env
+
+# Site-specific compose overrides (see compose.override.example.yaml)
+compose.override.yaml
 .env.local
 .env.*.local
 

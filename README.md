@@ -54,7 +54,7 @@ This fork extends the original with additional logo sources, image input methods
 - `Docker/static/js/` – frontend modules: `editor.js`, `colorpicker.js`, `preview.js`, `lightbox.js`.
 - `Docker/static/css/` – styles: `base.css`, `editor.css`, `controls.css`, `lightbox.css`.
 - `Docker/Dockerfile` – image build for the app.
-- `compose.yaml` – optional compose definition.
+- `compose.yaml` – generic compose definition. Put site-specific wiring (reverse proxy labels, extra networks) in a git-ignored `compose.override.yaml`; see `compose.override.example.yaml`.
 - `.env.example` – environment variables file.
 
 # Quick start (Docker)

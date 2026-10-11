@@ -12,6 +12,8 @@ DEST="${DEPLOY_DIR:-/mnt/cache/docker/artist-logo-generator}"
 rsync -a --inplace --delete --exclude '__pycache__/' --exclude '.claude/' "$SRC/Docker/" "$DEST/Docker/"
 install -m 644 "$SRC/compose.yaml" "$DEST/compose.yaml"
 # .env is never touched: it lives only in the deploy dir.
+# compose.override.yaml (site-specific labels/networks) also lives only in the deploy dir.
+[ -f "$DEST/compose.override.yaml" ] || echo "NOTE: $DEST/compose.override.yaml missing (optional; see compose.override.example.yaml)" >&2
 [ -f "$DEST/.env" ] || echo "WARN: $DEST/.env missing (copy .env.example and fill in)" >&2
 
 echo "synced $SRC -> $DEST"

@@ -1,0 +1,22 @@
+# Example site-specific overrides. Copy to compose.override.yaml (git-ignored)
+# next to compose.yaml on the host and adjust; `docker compose` merges it
+# automatically. Nothing here is required to run the app.
+services:
+  plex-artist-logos:
+    networks:
+      - default
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.artist-logos.rule=Host(`artist-logos.example.com`)"
+      - "traefik.http.routers.artist-logos.entrypoints=websecure"
+      - "traefik.http.routers.artist-logos.tls.certresolver=myresolver"
+      - "traefik.http.services.artist-logos.loadbalancer.server.port=5000"
+      # The app has no authentication: restrict it (e.g. a LAN-only IP allow-list
+      # middleware) and/or stop publishing the host port in compose.yaml.
+      # - "traefik.http.routers.artist-logos.middlewares=lan-only@file"
+
+networks:
+  proxy:
+    external: true
