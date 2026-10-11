@@ -303,6 +303,20 @@ function setupEventListeners() {
     const lightboxEl = document.getElementById('lightbox');
     const lightboxImg = document.getElementById('lightbox-img');
     if (plexImgEl) {
+      // /plex_proxy 404s when Plex has no poster for the artist: show a label
+      // instead of a broken image. Listeners cover every place src is set.
+      const plexEmptyEl = document.getElementById('plex-img-empty');
+      if (plexEmptyEl) {
+        plexImgEl.addEventListener('error', () => {
+          if (!plexImgEl.getAttribute('src')) return;  // initial empty src
+          plexImgEl.style.display = 'none';
+          plexEmptyEl.hidden = false;
+        });
+        plexImgEl.addEventListener('load', () => {
+          plexImgEl.style.display = '';
+          plexEmptyEl.hidden = true;
+        });
+      }
       plexImgEl.style.cursor = 'zoom-in';
       plexImgEl.addEventListener('click', async (ev) => {
         if (!plexImgEl.src) return;
