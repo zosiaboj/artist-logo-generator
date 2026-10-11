@@ -7,6 +7,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    {# Browser-side font specimens for the text-logo picker (display only; rendering uses the server-downloaded TTFs). #}
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?{% for font in fonts %}family={{ font|urlencode }}&amp;{% endfor %}display=swap">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/editor.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/lightbox.css') }}">
@@ -208,7 +210,7 @@
                             <h4>Font</h4>
                             <div id="default-fonts">
                                 {% for font in fonts %}
-                                    <button class="font-btn" onclick="selectFont('{{ font }}')">{{ font }}</button>
+                                    <button class="font-btn font-sample" style="font-family:'{{ font }}', sans-serif" onclick="selectFont('{{ font }}')">{{ font }}</button>
                                 {% endfor %}
                             </div>
                         </div>
