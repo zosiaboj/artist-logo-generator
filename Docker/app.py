@@ -164,6 +164,35 @@ def _image_mimetype(content_type):
     return ct if ct in _ALLOWED_IMAGE_TYPES else 'image/jpeg'
 
 
+_FONT_HOSTS = {'fonts.googleapis.com', 'fonts.gstatic.com'}
+_MAX_FONT_BYTES = 25 * 1024 * 1024
+
+
+def _google_fonts_get(url, headers=None, timeout=20):
+    """Size-capped, host-pinned GET for Google Fonts CSS / font files (bytes).
+
+    The font URL comes out of the CSS response, so it is pinned to Google's
+    hosts rather than trusted; every request has a timeout and a deadline.
+    """
+    body, _ = v.fetch_bytes(url, lambda u: urlparse(u).hostname in _FONT_HOSTS,
+                            max_bytes=_MAX_FONT_BYTES,
+                            headers_for=(lambda u: headers) if headers else None,
+                            timeout=timeout)
+    return body
+
+
+def _atomic_write(path, data):
+    """Write via temp file + rename so a concurrent reader never sees a partial font."""
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, 'wb') as f:
+            f.write(data)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def _svg_to_image(raw):
     v.check_svg(raw)
     try:
@@ -284,7 +313,7 @@ def get_cjk_font_for_text(text):
     css_url = (f"https://fonts.googleapis.com/css2?family={quote(family)}:wght@400"
                f"&text={quote(cjk_chars)}")
     try:
-        css = requests.get(css_url, headers={"User-Agent": _MODERN_UA}, timeout=15).text
+        css = _google_fonts_get(css_url, headers={"User-Agent": _MODERN_UA}, timeout=15).decode('utf-8', 'replace')
         # Match either .woff2 extension or format('woff2') annotation
         woff2_urls = re.findall(r"url\(([^)]+)\)\s*format\(['\"]woff2['\"]\)", css)
         if not woff2_urls:
@@ -297,10 +326,11 @@ def get_cjk_font_for_text(text):
         font_path = os.path.join(logic.FONT_DIR, f'nonlatin_subset_{char_hash}.ttf')
 
         if not os.path.exists(font_path):
-            r = requests.get(woff2_urls[0], timeout=30)
-            r.raise_for_status()
+            woff2 = _google_fonts_get(woff2_urls[0].strip('\'"'), timeout=30)
             os.makedirs(logic.FONT_DIR, exist_ok=True)
-            TTFont(BytesIO(r.content)).save(font_path)
+            buf = BytesIO()
+            TTFont(BytesIO(woff2)).save(buf)
+            _atomic_write(font_path, buf.getvalue())
             print(f"{family} subset for {cjk_chars!r} → {font_path} ({os.path.getsize(font_path)//1024} KB)")
 
         with _cjk_cache_lock:
@@ -310,7 +340,7 @@ def get_cjk_font_for_text(text):
         return font_path
 
     except Exception as e:
-        print(f"{family} font download failed for {cjk_chars!r}: {e}")
+        print(f"{family} font download failed for {cjk_chars!r}: {type(e).__name__}")
         return None
 
 def download_font_if_needed(font_name):
@@ -344,16 +374,14 @@ def download_font_if_needed(font_name):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Linux; U; Android 2.2; en-us; Nexus One Build/FRF91) AppleWebKit/533.1 (KHTML, like Gecko) Version/4.0 Mobile Safari/533.1'
         }
-        css_response = requests.get(css_url, headers=headers)
-        css_response.raise_for_status()
-        css_text = css_response.text
+        css_text = _google_fonts_get(css_url, headers=headers, timeout=15).decode('utf-8', 'replace')
 
         font_urls = re.findall(r"url\(([^)]+)\)", css_text)
         if not font_urls:
             print(f"Could not find any font URL in the CSS for '{font_name}'.")
             return None
 
-        font_url = font_urls[0]
+        font_url = font_urls[0].strip('\'"')
 
         extension = ".ttf"
         for allowed_ext in ('.woff2', '.woff', '.otf', '.ttf'):
@@ -365,21 +393,19 @@ def download_font_if_needed(font_name):
             return None
 
         f_path = os.path.join(font_dir, font_basename + extension)
-        font_response = requests.get(font_url)
-        font_response.raise_for_status()
+        font_bytes = _google_fonts_get(font_url, timeout=30)
 
         os.makedirs(font_dir, exist_ok=True)
-        with open(f_path, 'wb') as f:
-            f.write(font_response.content)
+        _atomic_write(f_path, font_bytes)
 
         print(f"Successfully downloaded and saved '{font_name}' to '{f_path}'.")
         return f_path
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error downloading font '{font_name}': {e}")
+    except (requests.exceptions.RequestException, InputError) as e:
+        print(f"Error downloading font '{font_name}': {type(e).__name__}: {e if isinstance(e, InputError) else ''}")
         return None
     except Exception as e:
-        print(f"An unexpected error occurred while downloading font '{font_name}': {e}")
+        print(f"An unexpected error occurred while downloading font '{font_name}': {type(e).__name__}")
         return None
 
 @app.route('/get_options/<rating_key>')
@@ -707,10 +733,14 @@ def remove_bg():
     return jsonify({'data_url': f'data:image/png;base64,{b64}'})
 
 if __name__ == '__main__':
-    print("Downloading all fonts listed in fonts.txt...")
-    for font in DEFAULT_FONTS:
-        download_font_if_needed(font)
-    print("Font download process finished.")
+    def _prefetch_fonts():
+        print("Downloading all fonts listed in fonts.txt...")
+        for font in DEFAULT_FONTS:
+            download_font_if_needed(font)
+        print("Font download process finished.")
+    # Background: a slow or unreachable Google Fonts must not delay the server
+    # starting. Requests for a font not fetched yet download it on demand.
+    threading.Thread(target=_prefetch_fonts, daemon=True, name='font-prefetch').start()
     # Eager warmup trades ~900MB of standing baseline RAM (import tax + ORT session
     # + numba JIT) for a fast first /remove_bg request. Default is lazy — nothing
     # rembg-related loads until someone actually uses background removal — since
