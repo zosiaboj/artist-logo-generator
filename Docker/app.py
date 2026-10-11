@@ -1,4 +1,5 @@
-import os, base64, re, requests, json, time
+import os, base64, re, requests, json, time, gc, threading
+from collections import OrderedDict
 from io import BytesIO
 from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
@@ -25,6 +26,42 @@ _ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 
 _REMBG_ENABLED = os.environ.get('REMBG_ENABLED', '').lower() == 'true'
 
+# rembg models are ONNX sessions that can be 100s of MB to 1GB+ resident once loaded
+# (birefnet-general in particular). Caching one is what makes repeat use fast, but
+# caching every model a user has ever tried would let the container's RSS climb
+# forever and never come back down. Bound it to an LRU of REMBG_CACHE_SIZE models
+# (default 1) and explicitly drop the evicted session so its native memory is freed.
+_REMBG_CACHE_MAX = max(1, int(os.environ.get('REMBG_CACHE_SIZE', '1')))
+_rembg_session_cache: "OrderedDict[str, object]" = OrderedDict()  # model_name → rembg session (LRU)
+_rembg_cache_lock = threading.Lock()
+
+def _get_rembg_session(model):
+    """Returns a cached rembg session for `model`, evicting the least-recently-used
+    session first if the cache is at capacity."""
+    from rembg import new_session
+    import onnxruntime as ort
+    with _rembg_cache_lock:
+        session = _rembg_session_cache.get(model)
+        if session is not None:
+            _rembg_session_cache.move_to_end(model)
+            return session
+        if len(_rembg_session_cache) >= _REMBG_CACHE_MAX:
+            evicted_name, evicted_session = _rembg_session_cache.popitem(last=False)
+            del evicted_session
+            gc.collect()
+            print(f"rembg: evicted '{evicted_name}' session to free memory")
+        # ORT's default memory arena pre-reserves a growable buffer per distinct
+        # tensor shape it sees, so RSS ratchets up with every new input image size
+        # and never comes back down (measured ~450MB extra across ~7 varying-size
+        # calls on u2net). Disabling it trades a little inference speed for a much
+        # lower, flatter memory ceiling — worth it for a single-user tool.
+        sess_opts = ort.SessionOptions()
+        sess_opts.enable_cpu_mem_arena = False
+        sess_opts.enable_mem_pattern = False
+        session = new_session(model, sess_opts=sess_opts)
+        _rembg_session_cache[model] = session
+        return session
+
 def load_default_fonts():
     """Loads default fonts from fonts.txt, with a fallback list."""
     try:
@@ -49,6 +86,8 @@ def _get_sorted_artists(force_refresh=False):
     if not force_refresh and _artist_cache is not None and (time.time() - _artist_cache_time) < _ARTIST_CACHE_TTL:
         return _artist_cache
     lib = plex_utils.get_library(os.environ.get('LIBRARY_NAME', 'Music'))
+    if lib is None:
+        raise RuntimeError("Plex library unavailable — check PLEX_URL/PLEX_TOKEN and server connectivity")
     _artist_cache = sorted(lib.all(), key=lambda x: re.sub(r'^(the|a|an)\s+', '', x.title.lower()))
     _artist_cache_time = time.time()
     return _artist_cache
@@ -77,8 +116,9 @@ _CJK_FONTS = {'Noto Sans SC', 'Noto Serif SC', 'Noto Sans JP', 'Noto Serif JP', 
 
 _MODERN_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-_cjk_char_cache = {}          # (family, chars) → font_path
-_cjk_cache_lock = __import__('threading').Lock()
+_CJK_CACHE_MAX = 200          # bounded like plex_utils._mb_url_cache — caps growth on large/multilingual libraries
+_cjk_char_cache: "OrderedDict[tuple, str]" = OrderedDict()  # (family, chars) → font_path, LRU-bounded
+_cjk_cache_lock = threading.Lock()
 
 # Noto Sans SC (Source Han Sans) bundles Latin/Cyrillic/CJK/Hangul/Kana glyphs,
 # but scripts like Arabic, Hebrew and Devanagari live in their own Noto families —
@@ -123,6 +163,7 @@ def get_cjk_font_for_text(text):
     with _cjk_cache_lock:
         cached = _cjk_char_cache.get(cache_key)
         if cached and os.path.exists(cached):
+            _cjk_char_cache.move_to_end(cache_key)
             return cached
 
     from urllib.parse import quote
@@ -150,6 +191,8 @@ def get_cjk_font_for_text(text):
             print(f"{family} subset for {cjk_chars!r} → {font_path} ({os.path.getsize(font_path)//1024} KB)")
 
         with _cjk_cache_lock:
+            if cache_key not in _cjk_char_cache and len(_cjk_char_cache) >= _CJK_CACHE_MAX:
+                _cjk_char_cache.popitem(last=False)
             _cjk_char_cache[cache_key] = font_path
         return font_path
 
@@ -598,11 +641,11 @@ def remove_bg():
             import numpy as np
             from PIL import Image as _Img
             from io import BytesIO as _BIO
-            from rembg import remove, new_session
+            from rembg import remove
             model = data.get('model', 'u2net')
             if model not in _ALLOWED_REMBG_MODELS:
                 model = 'u2net'
-            session = new_session(model)
+            session = _get_rembg_session(model)
             result_bytes = remove(img_bytes, session=session)
 
             # Post-processing
@@ -632,15 +675,24 @@ if __name__ == '__main__':
     for font in DEFAULT_FONTS:
         download_font_if_needed(font)
     print("Font download process finished.")
-    if _REMBG_ENABLED:
-        print("Warming up rembg model (this may download ~175 MB on first run)...")
+    # Eager warmup trades ~900MB of standing baseline RAM (import tax + ORT session
+    # + numba JIT) for a fast first /remove_bg request. Default is lazy — nothing
+    # rembg-related loads until someone actually uses background removal — since
+    # most usage of this app is browsing/saving logos, not bg removal. Measured
+    # cost of lazy: idle baseline ~90MB, but the first /remove_bg call after any
+    # restart takes ~70s (numba JIT-compiling pymatting's matting routines from
+    # scratch); every call after that is ~1s. Set REMBG_EAGER_WARMUP=true to pay
+    # that 70s at container boot instead, so it's never user-facing.
+    if _REMBG_ENABLED and os.environ.get('REMBG_EAGER_WARMUP', '').lower() == 'true':
+        print("Warming up rembg default model (this may download ~175 MB on first run)...")
         try:
             from rembg import remove as _rembg_remove
             from io import BytesIO as _BytesIO
             from PIL import Image as _PILImage
+            _warm_session = _get_rembg_session('u2net')
             _buf = _BytesIO()
             _PILImage.new('RGB', (1, 1)).save(_buf, 'PNG')
-            _rembg_remove(_buf.getvalue())
+            _rembg_remove(_buf.getvalue(), session=_warm_session)
             print("rembg model ready.")
         except Exception as e:
             print(f"rembg warmup failed: {e}")

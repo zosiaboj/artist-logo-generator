@@ -32,6 +32,7 @@ Russo One
 Rye
 Tourney
 UnifrakturMaguntia
+Manufacturing Consent
 Workbench
 
 # Handwriting
