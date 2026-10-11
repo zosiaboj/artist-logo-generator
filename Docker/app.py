@@ -92,6 +92,18 @@ def _get_sorted_artists(force_refresh=False):
     _artist_cache_time = time.time()
     return _artist_cache
 
+@app.route('/healthz')
+def healthz():
+    # Liveness only: deliberately does not touch Plex, so a Plex outage doesn't
+    # mark this container unhealthy (it recovers on its own via get_server()).
+    return 'ok', 200
+
+
+@app.errorhandler(RuntimeError)
+def _plex_unavailable(e):
+    return jsonify({'status': 'error', 'message': str(e)}), 503
+
+
 @app.route('/')
 def index():
     artists = _get_sorted_artists(force_refresh='refresh' in request.args)

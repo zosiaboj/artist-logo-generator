@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import requests
 import re
 import pathlib
@@ -20,11 +21,32 @@ _MB_CACHE_MAX = 1000
 _mb_url_cache: dict[str, list[str]] = {}
 _MA_HEADERS = {"User-Agent": "artist-logo-generator/1.0 (homelab)"}
 
-try:
-    server = PlexServer(PLEX_URL, PLEX_TOKEN)
-except Exception as e:
-    print(f"Plex Connection Error: {e}")
-    server = None
+# Plex connection is lazy: connecting at import meant a Plex outage at container
+# start left the app dead until restart. Failed attempts are retried at most
+# every _RETRY_SECS so a down Plex doesn't stall every request.
+_server = None
+_server_fail_time = 0.0
+_server_lock = threading.Lock()
+_RETRY_SECS = 15
+
+
+def get_server():
+    """Return a connected PlexServer, or None if Plex is unreachable right now."""
+    global _server, _server_fail_time
+    if _server is not None:
+        return _server
+    with _server_lock:
+        if _server is not None:
+            return _server
+        if time.time() - _server_fail_time < _RETRY_SECS:
+            return None
+        try:
+            _server = PlexServer(PLEX_URL, PLEX_TOKEN, timeout=10)
+        except Exception as e:
+            _server_fail_time = time.time()
+            print(f"Plex connection error: {type(e).__name__}")  # not str(e): may echo the URL
+            return None
+        return _server
 
 
 def plex_headers():
@@ -45,11 +67,13 @@ def is_plex_url(url):
 
 
 def get_library(name):
-    return server.library.section(name) if server else None
+    s = get_server()
+    return s.library.section(name) if s else None
 
 
 def fetch_artist(rating_key):
-    return server.fetchItem(int(rating_key)) if server else None
+    s = get_server()
+    return s.fetchItem(int(rating_key)) if s else None
 
 
 def _clean_title(title):
@@ -112,6 +136,7 @@ def resource_to_url(val):
     logged). Server-side fetches authenticate via plex_headers() instead.
     Returns None when a usable URL cannot be derived.
     """
+    server = get_server()
     if not val:
         return None
 

@@ -21,7 +21,7 @@ services:
       - rembg_models:/app/rembg_models
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/', timeout=3)"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/healthz', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
