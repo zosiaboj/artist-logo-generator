@@ -170,22 +170,19 @@ def postprocess_alpha_sharpen(arr):
     return out
 
 def postprocess_remove_dark_interior(arr, brightness_threshold=40):
-    """Make enclosed dark opaque pixel regions (e.g. inside letter holes) transparent."""
+    """Make every dark, opaque pixel transparent (letter counters and any dark remnants).
+
+    After rembg the outer border is already transparent, so this clears the dark pixels
+    left inside the subject as well as border-touching remnants. The output is composited
+    onto black, so this mostly matters for tinted/inverted logos.
+    """
     import numpy as np
-    from scipy import ndimage
     alpha = arr[:, :, 3]
     brightness = arr[:, :, :3].astype(int).mean(axis=2)
     dark_opaque = (alpha >= 128) & (brightness < brightness_threshold)
     if not dark_opaque.any():
         return arr
-    labeled, n = ndimage.label(dark_opaque)
-    border_labels = set()
-    for edge in (labeled[0, :], labeled[-1, :], labeled[:, 0], labeled[:, -1]):
-        border_labels.update(edge.tolist())
-    border_labels.discard(0)
     out = arr.copy()
-    # Remove enclosed regions (not touching border); also remove border-touching dark
-    # remnants since after rembg the outer border should be fully transparent already
     out[dark_opaque, 3] = 0
     return out
 
