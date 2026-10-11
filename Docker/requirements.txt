@@ -1,0 +1,12 @@
+# Core runtime dependencies (pinned to the versions verified on asgard).
+# Background removal (optional) lives in requirements-rembg.txt.
+plexapi==4.18.3
+requests==2.34.2
+Pillow==12.3.0
+Flask==3.1.3
+Flask-Limiter==4.1.1
+waitress==3.0.2
+fonttools[woff]==4.66.1
+brotli==1.2.0
+zopfli==0.4.3
+cairosvg==2.9.1

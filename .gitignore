@@ -46,9 +46,6 @@ env/
 Thumbs.db
 .DS_Store
 
-# Docker
-.dockerignore
-
 # Local development
 *.log
 .coverage

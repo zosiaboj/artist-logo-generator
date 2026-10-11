@@ -32,6 +32,13 @@ _ALLOWED_PROXY_HOSTS = {'assets.fanart.tv', 'www.metal-archives.com', 'r2.theaud
 _ALLOWED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 
 _REMBG_ENABLED = os.environ.get('REMBG_ENABLED', '').lower() == 'true'
+if _REMBG_ENABLED:
+    import importlib.util
+    if importlib.util.find_spec('rembg') is None:
+        # Image was built with INSTALL_REMBG=false: don't expose a feature that would 500.
+        print("WARNING: REMBG_ENABLED=true but rembg isn't installed in this image — "
+              "rebuild with REMBG_ENABLED=true (docker compose up -d --build). Background removal disabled.")
+        _REMBG_ENABLED = False
 
 # rembg models are ONNX sessions that can be 100s of MB to 1GB+ resident once loaded
 # (birefnet-general in particular). Caching one is what makes repeat use fast, but
@@ -763,4 +770,18 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"rembg warmup failed: {e}")
     # CJK subset fonts are downloaded lazily on first preview/save request.
-    app.run(host='0.0.0.0', port=5000)
+    try:
+        from waitress import serve
+    except ImportError:  # local dev without waitress installed
+        app.run(host='0.0.0.0', port=5000)
+    else:
+        @app.after_request
+        def _access_log(resp):
+            # waitress has no access log; keep the one the dev server printed (skip the healthcheck).
+            if request.path != '/healthz':
+                client = (request.headers.get('X-Forwarded-For') or request.remote_addr or '-').split(',')[0].strip()
+                print(f'{client} "{request.method} {request.full_path.rstrip("?")}" {resp.status_code}', flush=True)
+            return resp
+        # threads: bulk apply streams hold one for minutes. channel_timeout: first /remove_bg
+        # after boot can sit ~70s (numba JIT) with no bytes on the wire.
+        serve(app, host='0.0.0.0', port=5000, threads=8, channel_timeout=300)

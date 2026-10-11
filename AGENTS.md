@@ -11,8 +11,8 @@ Flask app (fork of an upstream repo) that builds 1000×1000 black-background JPE
 - `compose.yaml` (generic), `compose.override.example.yaml` (template for site wiring), `deploy.sh`, `.env.example` — deployment.
 
 ## Run / deploy
-No tests, linter, `requirements.txt`, or CI exist. Dependencies are the single `pip install` line in `Docker/Dockerfile` (Python 3.11-slim); add new packages there.
-- Syntax check: `python3 -m py_compile Docker/app.py Docker/logic.py Docker/plex_utils.py`
+No tests, linter, or CI exist. Dependencies are pinned in `Docker/requirements.txt` (core) and `Docker/requirements-rembg.txt` (rembg/onnxruntime/numpy/scipy, installed only when the image is built with `INSTALL_REMBG=true`, which compose derives from `REMBG_ENABLED`; toggling it needs a rebuild). Python 3.11-slim, served by waitress (8 threads). Add new packages to the right requirements file.
+- Syntax check: `python3 -m py_compile Docker/app.py Docker/logic.py Docker/plex_utils.py Docker/validation.py`
 - Deploy: `./deploy.sh` syncs `Docker/` and `compose.yaml` to `/mnt/cache/docker/artist-logo-generator` on asgard. `./deploy.sh --up` also runs `docker compose config -q` and `docker compose up -d --build`. Run it on asgard or a host with that path. Override the target with `DEPLOY_DIR`.
 - Site wiring is kept out of the repo: `compose.override.yaml` lives only in the deploy dir (git-ignored; `deploy.sh` never touches it) and holds the Sablier labels and `proxy` network. The Traefik route is a file-provider entry in `/mnt/cache/docker/traefik/dynamic/sablier-artist-logos.yml` (`lan-only@file` then Sablier), not labels. Don't put infra-specific labels in `compose.yaml`.
 - Logs: `docker compose logs -f plex-artist-logos` (from the deploy dir).

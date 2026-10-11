@@ -1,0 +1,6 @@
+# Optional: ML background removal (REMBG_ENABLED=true). ~1GB of wheels.
+# Installed when the image is built with INSTALL_REMBG=true (compose derives it from REMBG_ENABLED).
+rembg==2.0.85
+onnxruntime==1.31.0
+numpy==2.4.6
+scipy==1.17.1

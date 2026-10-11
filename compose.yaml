@@ -4,7 +4,12 @@
 # compose.override.example.yaml.
 services:
   plex-artist-logos:
-    build: ./Docker
+    build:
+      context: ./Docker
+      args:
+        # rembg (~1GB) is only installed when background removal is enabled.
+        # Changing REMBG_ENABLED needs a rebuild: docker compose up -d --build
+        INSTALL_REMBG: ${REMBG_ENABLED:-false}
     hostname: plex-artist-logos
     ports:
       - "5005:5000"
