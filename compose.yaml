@@ -1,8 +1,8 @@
----
 
 services:
   plex-artist-logos:
     build: ./Docker
+    hostname: plex-artist-logos
     ports:
       - "5005:5000"
     environment:
@@ -12,18 +12,41 @@ services:
       - FANART_API_KEY=${FANART_API_KEY}
       - UPDATE_PLEX=${UPDATE_PLEX:-true}
       - REMBG_ENABLED=${REMBG_ENABLED:-false}
+      - U2NET_HOME=/app/rembg_models
     volumes:
       - ./Docker/fonts.txt:/app/fonts.txt
       - fonts:/app/fonts
       - data:/app/ArtistLogos
       - logs:/app/Logs
+      - rembg_models:/app/rembg_models
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    mem_limit: 3g
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    networks:
+      - default
+      - proxy
+    labels:
+      - "traefik.enable=false"
+      - "sablier.enable=true"
+      - "sablier.group=media-tools"
+      - "sablier.display.name=Artist Logo Generator"
+
 
 volumes:
   fonts:
   data:
   logs:
+  rembg_models:
+
+networks:
+  proxy:
+    external: true
