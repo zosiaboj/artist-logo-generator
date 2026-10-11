@@ -4,6 +4,31 @@ from io import BytesIO
 
 FONT_DIR = '/app/fonts'
 
+# Decompressed-pixel caps. Pillow only warns at MAX_IMAGE_PIXELS (errors at 2x), so
+# open_image() enforces the limit itself from the header, before any pixel decode.
+MAX_PIXELS = 40_000_000
+MAX_REMBG_PIXELS = 16_000_000  # the ONNX models multiply this by several float32 planes
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+
+
+class ImageTooLarge(ValueError):
+    pass
+
+
+def open_image(data, max_pixels=MAX_PIXELS):
+    """Image.open on bytes, rejecting oversized dimensions from the header alone."""
+    try:
+        img = Image.open(BytesIO(data))
+    except Image.DecompressionBombError:
+        # Pillow's own hard stop (2x MAX_IMAGE_PIXELS), raised from inside Image.open
+        raise ImageTooLarge("image too large (max %dMP)" % (max_pixels // 1_000_000))
+    w, h = img.size
+    if w * h > max_pixels:
+        img.close()
+        raise ImageTooLarge(f"image too large ({w}x{h}px, max {max_pixels // 1_000_000}MP)")
+    return img
+
+
 def _is_nonlatin_char(char):
     cp = ord(char)
     return (
@@ -180,7 +205,7 @@ def remove_solid_bg(img_bytes, color_hex, threshold=30):
 def generate_text_logo(text, font_path, fallback_font_path=None, rows=1, color="white", case="none"):
     if isinstance(text, bytes):
         text = text.decode('utf-8')
-    text = str(text)
+    text = str(text)[:150]  # bound canvas size for pathological titles
 
     if case == "upper": text = text.upper()
     elif case == "lower": text = text.lower()

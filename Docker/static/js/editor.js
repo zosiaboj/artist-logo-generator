@@ -1046,6 +1046,8 @@ async function saveCustom() {
     updateStatus(currentKey, "custom");
     document.getElementById("plex-img").src =
       `/plex_proxy/${currentKey}?t=${Date.now()}`;
+  } else {
+    showToast(data.message || "Save failed", "error");
   }
 }
 
@@ -1166,6 +1168,8 @@ async function save() {
     updateStatus(currentKey, "done");
     document.getElementById("plex-img").src =
       `/plex_proxy/${currentKey}?t=${Date.now()}`;
+  } else {
+    showToast(data.message || "Save failed", "error");
   }
 }
 
@@ -1188,6 +1192,8 @@ async function saveCustom() {
     updateStatus(currentKey, "custom");
     document.getElementById("plex-img").src =
       `/plex_proxy/${currentKey}?t=${Date.now()}`;
+    } else {
+    showToast(data.message || "Save failed", "error");
   }
 }
 

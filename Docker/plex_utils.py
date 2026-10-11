@@ -7,6 +7,7 @@ import pathlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 from plexapi.server import PlexServer
+from plexapi.exceptions import BadRequest, NotFound
 
 PLEX_URL = os.environ.get('PLEX_URL')
 PLEX_TOKEN = os.environ.get('PLEX_TOKEN')
@@ -72,8 +73,18 @@ def get_library(name):
 
 
 def fetch_artist(rating_key):
+    """Return the artist for rating_key, or None if it doesn't exist or isn't an artist.
+
+    Raises RuntimeError when Plex itself is unreachable (-> 503 in the app).
+    """
     s = get_server()
-    return s.fetchItem(int(rating_key)) if s else None
+    if s is None:
+        raise RuntimeError("Plex unavailable — check PLEX_URL/PLEX_TOKEN and server connectivity")
+    try:
+        item = s.fetchItem(int(rating_key))
+    except (NotFound, BadRequest):
+        return None
+    return item if getattr(item, 'type', None) == 'artist' else None
 
 
 def _clean_title(title):

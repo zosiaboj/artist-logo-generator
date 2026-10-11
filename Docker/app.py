@@ -5,10 +5,17 @@ from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from PIL import ImageFont
+from urllib.parse import quote_plus
+from PIL import ImageFont, UnidentifiedImageError
 import plex_utils, logic
+import validation as v
+from validation import InputError
 
 app = Flask(__name__)
+
+# Hard ceiling on any request body. Uploads/pastes arrive as base64 data: URLs in JSON
+# (15 MB image ~= 20 MB base64), so leave headroom above v.MAX_UPLOAD_BYTES.
+app.config['MAX_CONTENT_LENGTH'] = 25 * 1024 * 1024
 
 limiter = Limiter(
     app=app,
@@ -102,6 +109,100 @@ def healthz():
 @app.errorhandler(RuntimeError)
 def _plex_unavailable(e):
     return jsonify({'status': 'error', 'message': str(e)}), 503
+
+
+@app.errorhandler(InputError)
+def _bad_input(e):
+    return jsonify({'status': 'error', 'message': str(e)}), e.status
+
+
+@app.errorhandler(413)
+def _too_large(e):
+    return jsonify({'status': 'error', 'message': 'request too large'}), 413
+
+
+@app.errorhandler(logic.ImageTooLarge)
+def _image_too_large(e):
+    return jsonify({'status': 'error', 'message': str(e)}), 413
+
+
+@app.errorhandler(UnidentifiedImageError)
+def _not_an_image(e):
+    return jsonify({'status': 'error', 'message': 'not a valid image'}), 400
+
+
+def _body():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        raise InputError('JSON object body required')
+    return data
+
+
+def _artist(key):
+    artist = plex_utils.fetch_artist(v.rating_key(key))
+    if not artist:
+        raise InputError('artist not found', 404)
+    return artist
+
+
+def _is_external_allowed(url):
+    return urlparse(url).hostname in _ALLOWED_PROXY_HOSTS
+
+
+def _is_fetchable(url):
+    return plex_utils.is_plex_url(url) or _is_external_allowed(url)
+
+
+def _headers_for(url):
+    # Plex token only ever goes to Plex, even across redirects.
+    return plex_utils.plex_headers() if plex_utils.is_plex_url(url) else None
+
+
+def _image_mimetype(content_type):
+    ct = (content_type or 'image/jpeg').split(';')[0].strip()
+    # Only forward image MIME types — prevents XSS via a malicious upstream Content-Type
+    return ct if ct in _ALLOWED_IMAGE_TYPES else 'image/jpeg'
+
+
+def _svg_to_image(raw):
+    v.check_svg(raw)
+    try:
+        import cairosvg
+        png = cairosvg.svg2png(bytestring=raw, output_width=1000, output_height=1000)
+    except Exception as e:
+        print(f"SVG conversion failed: {type(e).__name__}")
+        raise InputError('SVG conversion failed — try saving as PNG first')
+    return logic.open_image(png)
+
+
+def _image_from_url_field(url):
+    """Image from a data: URL (paste/upload) or an allowlisted remote URL, size-capped."""
+    if not isinstance(url, str) or not url:
+        raise InputError('url required')
+    if url.startswith('data:'):
+        mime, raw = v.decode_data_url(url)
+        return _svg_to_image(raw) if mime == 'image/svg+xml' else logic.open_image(raw)
+    if len(url) > v.MAX_URL_CHARS:
+        raise InputError('url too long')
+    raw, _ = v.fetch_bytes(url, _is_external_allowed)
+    return logic.open_image(raw)
+
+
+_STATUS_CYCLE = {'none': 'custom', 'custom': 'done', 'done': 'none'}
+
+
+def _cycle_status(artist):
+    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
+    os.makedirs(path, exist_ok=True)
+    status_file = os.path.join(path, '.status')
+    current = 'none'
+    if os.path.exists(status_file):
+        with open(status_file, 'r') as f:
+            current = f.read().strip()
+    nxt = _STATUS_CYCLE.get(current, 'none')
+    with open(status_file, 'w') as f:
+        f.write(nxt)
+    return nxt
 
 
 @app.route('/')
@@ -283,27 +384,30 @@ def download_font_if_needed(font_name):
 
 @app.route('/get_options/<rating_key>')
 def get_options(rating_key):
-    if not rating_key.isdigit():
+    if not v.is_rating_key(rating_key):
         return jsonify({"logos": []}), 400
     artist = plex_utils.fetch_artist(rating_key)
     if not artist:
         return jsonify({"logos": []}), 404
     logos = plex_utils.get_fanart_logos(artist)
-    return jsonify({"logos": logos, "google_url": f"https://www.google.com/search?q={artist.title}+transparent+logo+png&tbm=isch"})
+    q = quote_plus(f"{artist.title} transparent logo png")
+    return jsonify({"logos": logos, "google_url": f"https://www.google.com/search?q={q}&tbm=isch"})
 
 
 @app.route('/get_metal_archives/<rating_key>')
 def get_metal_archives(rating_key):
-    if not rating_key.isdigit():
+    if not v.is_rating_key(rating_key):
         return jsonify({"logos": []}), 400
     artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return jsonify({"logos": []}), 404
     logos = plex_utils.get_metal_archives_logos(artist)
     return jsonify({"logos": logos})
 
 
 @app.route('/get_theaudiodb/<rating_key>')
 def get_theaudiodb(rating_key):
-    if not rating_key.isdigit():
+    if not v.is_rating_key(rating_key):
         return jsonify({'logos': []}), 400
     artist = plex_utils.fetch_artist(rating_key)
     if not artist:
@@ -314,49 +418,43 @@ def get_theaudiodb(rating_key):
 
 @app.route('/get_posters/<rating_key>')
 def get_posters(rating_key):
-    if not rating_key.isdigit():
+    if not v.is_rating_key(rating_key):
         return jsonify({"posters": []}), 400
     artist = plex_utils.fetch_artist(rating_key)
+    if not artist:
+        return jsonify({"posters": []}), 404
     posters = plex_utils.get_artist_posters(artist)
     return jsonify({"posters": posters})
 
 
 @app.route('/set_poster', methods=['POST'])
 def set_poster():
-    data = request.json or {}
-    rating_key = data.get('rating_key')
+    data = _body()
     url = data.get('url')
-    if not rating_key or not url:
-        return jsonify({'status': 'error', 'message': 'rating_key and url required'}), 400
-
-    parsed = urlparse(url)
-    if parsed.hostname not in _ALLOWED_PROXY_HOSTS:
-        return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
-
-    artist = plex_utils.fetch_artist(rating_key)
-    if not artist:
-        return jsonify({'status': 'error', 'message': 'artist not found'}), 404
+    if not isinstance(url, str) or not url or not data.get('rating_key'):
+        raise InputError('rating_key and url required')
+    if len(url) > v.MAX_URL_CHARS:
+        raise InputError('url too long')
+    artist = _artist(data.get('rating_key'))
+    if not _is_external_allowed(url):
+        raise InputError('domain not allowed', 403)
 
     try:
-        resp = requests.get(url, timeout=20)
-        resp.raise_for_status()
-        # Save to a temporary file so plexapi can upload it
+        raw, _ = v.fetch_bytes(url, _is_external_allowed)
+    except requests.RequestException as e:
+        print(f"set_poster fetch error: {type(e).__name__}")
+        return jsonify({'status': 'error', 'message': 'Failed to fetch image'}), 502
+    logic.open_image(raw).close()  # must be a real image within size limits
+
+    try:
         import tempfile
-        tf = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-        tf.write(resp.content)
-        tf.flush()
-        tf.close()
-
-        artist.uploadPoster(filepath=tf.name)
-
-        try:
-            os.remove(tf.name)
-        except Exception:
-            pass
-
+        with tempfile.NamedTemporaryFile(suffix='.jpg') as tf:
+            tf.write(raw)
+            tf.flush()
+            artist.uploadPoster(filepath=tf.name)
         return jsonify({'status': 'success'})
     except Exception as e:
-        print(f"set_poster error: {e}")
+        print(f"set_poster error: {type(e).__name__}")
         return jsonify({'status': 'error', 'message': 'Failed to set poster'}), 500
 
 
@@ -365,6 +463,8 @@ def proxy_image():
     url = request.args.get('url')
     if not url:
         return 'url required', 400
+    if len(url) > v.MAX_URL_CHARS:
+        return 'url too long', 400
     # Normalize input using plex_utils.resource_to_url which handles
     # absolute URLs, plex-relative paths and plexapi resource objects.
     try:
@@ -377,57 +477,31 @@ def proxy_image():
         return 'invalid url', 400
 
     parsed = urlparse(normalized)
-    is_plex = plex_utils.is_plex_url(normalized)
-    if not is_plex and parsed.hostname not in _ALLOWED_PROXY_HOSTS:
+    if not _is_fetchable(normalized):
         return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
 
-    url = normalized
-
     try:
-        # Plex gets the token as a header (server-side only); external hosts get none.
-        r = requests.get(url, headers=plex_utils.plex_headers() if is_plex else None, timeout=15)
-        r.raise_for_status()
-        ct = r.headers.get('Content-Type', 'image/jpeg') or 'image/jpeg'
-        # Only forward image MIME types — prevents XSS via a malicious upstream Content-Type
-        if ct.split(';')[0].strip() not in _ALLOWED_IMAGE_TYPES:
-            ct = 'image/jpeg'
-        return send_file(BytesIO(r.content), mimetype=ct)
+        body, ct = v.fetch_bytes(normalized, _is_fetchable, headers_for=_headers_for, timeout=15)
+        return send_file(BytesIO(body), mimetype=_image_mimetype(ct))
+    except InputError:
+        raise
     except Exception as e:
         print(f"proxy_image error fetching {parsed.hostname}{parsed.path}: {type(e).__name__}")
         return jsonify({'status': 'error', 'message': 'Failed to fetch image'}), 502
 
 @app.route('/save', methods=['POST'])
 def save():
-    data = request.json or {}
-    rating_key = data.get('rating_key')
-    url = data.get('url')
-    if not rating_key or not url:
-        return jsonify({'status': 'error', 'message': 'rating_key and url required'}), 400
-    artist = plex_utils.fetch_artist(rating_key)
-    if not artist:
-        return jsonify({'status': 'error', 'message': 'artist not found'}), 404
-    if url.startswith('data:image/svg+xml'):
-        try:
-            import cairosvg
-            svg_bytes = base64.b64decode(url.split(',')[1])
-            png_bytes = cairosvg.svg2png(bytestring=svg_bytes, output_width=1000, output_height=1000)
-            img = logic.Image.open(BytesIO(png_bytes))
-        except Exception as e:
-            print(f"SVG conversion failed: {e}")
-            return jsonify({'status': 'error', 'message': 'SVG conversion failed — try saving as PNG first'}), 400
-    elif url.startswith('data:image'):
-        img = logic.Image.open(BytesIO(base64.b64decode(url.split(',')[1])))
-    else:
-        parsed = urlparse(url)
-        if parsed.hostname not in _ALLOWED_PROXY_HOSTS:
-            return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
-        img = logic.Image.open(BytesIO(requests.get(url, timeout=20).content))
-    
-    final = logic.apply_transforms(img, **{k: data.get(k) for k in ['apply_default_size', 'invert', 'make_white', 'contrast', 'zoom', 'monochrome', 'tint']})
+    data = _body()
+    if not data.get('rating_key') or not data.get('url'):
+        raise InputError('rating_key and url required')
+    artist = _artist(data.get('rating_key'))
+    img = _image_from_url_field(data.get('url'))
+
+    final = logic.apply_transforms(img, **v.transform_params(data))
     path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
     os.makedirs(path, exist_ok=True)
     final.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
-    
+
     with open(os.path.join(path, '.status'), 'w') as f:
         f.write('done')
 
@@ -437,13 +511,8 @@ def save():
 @app.route('/save_custom', methods=['POST'])
 @limiter.limit("15 per minute")
 def save_custom():
-    data = request.json or {}
-    rating_key = str(data.get('rating_key', ''))
-    if not rating_key.isdigit():
-        return jsonify({'status': 'error', 'message': 'invalid rating_key'}), 400
-    artist = plex_utils.fetch_artist(rating_key)
-    if not artist:
-        return jsonify({'status': 'error', 'message': 'artist not found'}), 404
+    data = _body()
+    artist = _artist(data.get('rating_key'))
     font_name = data.get('font', 'Roboto')
     if font_name not in DEFAULT_FONTS:
         font_name = 'Roboto'
@@ -454,11 +523,11 @@ def save_custom():
 
     cjk_path = get_cjk_font_for_text(artist.title)
     img = logic.generate_text_logo(artist.title, f_path, fallback_font_path=cjk_path,
-                                   **{k: data.get(k) for k in ['rows', 'color', 'case']})
+                                   **v.text_params(data))
     path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
     os.makedirs(path, exist_ok=True)
     img.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
-    
+
     with open(os.path.join(path, '.status'), 'w') as f:
         f.write('custom')
 
@@ -467,33 +536,14 @@ def save_custom():
 
 @app.route('/toggle_status/<rating_key>', methods=['POST'])
 def toggle_status(rating_key):
-    artist = plex_utils.fetch_artist(rating_key)
-    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
-    os.makedirs(path, exist_ok=True)
-    status_file = os.path.join(path, '.status')
-    
-    current_status = 'none'
-    if os.path.exists(status_file):
-        with open(status_file, 'r') as f:
-            current_status = f.read().strip()
-            
-    if current_status == 'none':
-        next_status = 'custom'
-    elif current_status == 'custom':
-        next_status = 'done'
-    else: # done
-        next_status = 'none'
-        
-    with open(status_file, 'w') as f:
-        f.write(next_status)
-        
-    return jsonify({'status': 'success', 'new_status': next_status})
+    artist = _artist(rating_key)
+    return jsonify({'status': 'success', 'new_status': _cycle_status(artist)})
 
 @app.route('/bulk_apply_fanart', methods=['POST'])
 @limiter.limit("3 per minute")
 def bulk_apply_fanart():
-    data = request.json or {}
-    artist_keys = data.get('artist_keys', [])
+    data = _body()
+    artist_keys = v.rating_keys(data.get('artist_keys'))
     total = len(artist_keys)
 
     def _first_valid_url(urls):
@@ -509,6 +559,8 @@ def bulk_apply_fanart():
         for i, key in enumerate(artist_keys):
             try:
                 artist = plex_utils.fetch_artist(key)
+                if not artist:
+                    raise LookupError('artist not found')
 
                 logo_url = (
                     _first_valid_url(plex_utils.get_fanart_logos(artist))
@@ -517,7 +569,8 @@ def bulk_apply_fanart():
                 )
 
                 if logo_url:
-                    img = logic.Image.open(BytesIO(requests.get(logo_url, timeout=20).content))
+                    raw, _ = v.fetch_bytes(logo_url, _is_external_allowed)
+                    img = logic.open_image(raw)
                     final = logic.apply_transforms(img, apply_default_size=True)
 
                     path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
@@ -532,7 +585,7 @@ def bulk_apply_fanart():
 
                     updated_keys.append(key)
             except Exception as e:
-                print(f"Error updating artist {key}: {e}")
+                print(f"Error updating artist {key}: {type(e).__name__}")
 
             yield f"data: {json.dumps({'done': i + 1, 'total': total})}\n\n"
 
@@ -542,50 +595,28 @@ def bulk_apply_fanart():
 
 @app.route('/bulk_toggle_status', methods=['POST'])
 def bulk_toggle_status():
-    data = request.json
-    artist_keys = data.get('artist_keys', [])
+    data = _body()
+    artist_keys = v.rating_keys(data.get('artist_keys'))
     updated_artists = []
-    
+
     for key in artist_keys:
         try:
             artist = plex_utils.fetch_artist(key)
-            path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
-            os.makedirs(path, exist_ok=True)
-            status_file = os.path.join(path, '.status')
-            
-            current_status = 'none'
-            if os.path.exists(status_file):
-                with open(status_file, 'r') as f:
-                    current_status = f.read().strip()
-            
-            if current_status == 'none':
-                next_status = 'custom'
-            elif current_status == 'custom':
-                next_status = 'done'
-            else: # done
-                next_status = 'none'
-                
-            with open(status_file, 'w') as f:
-                f.write(next_status)
-            
-            updated_artists.append({'key': key, 'new_status': next_status})
+            if not artist:
+                continue
+            updated_artists.append({'key': key, 'new_status': _cycle_status(artist)})
         except Exception as e:
-            print(f"Error updating artist {key}: {e}")
+            print(f"Error updating artist {key}: {type(e).__name__}")
             continue
-            
+
     return jsonify({"status": "success", "updated_count": len(updated_artists), "updated_artists": updated_artists})
 
 
 @app.route('/preview_text', methods=['POST'])
 @limiter.limit("20 per minute")
 def preview_text():
-    data = request.json or {}
-    rating_key = str(data.get('rating_key', ''))
-    if not rating_key.isdigit():
-        return jsonify({'status': 'error', 'message': 'invalid rating_key'}), 400
-    artist = plex_utils.fetch_artist(rating_key)
-    if not artist:
-        return jsonify({'status': 'error', 'message': 'artist not found'}), 404
+    data = _body()
+    artist = _artist(data.get('rating_key'))
     font_name = data.get('font', 'Roboto')
     if font_name not in DEFAULT_FONTS:
         font_name = 'Roboto'
@@ -596,7 +627,7 @@ def preview_text():
 
     cjk_path = get_cjk_font_for_text(artist.title)
     img = logic.generate_text_logo(artist.title, f_path, fallback_font_path=cjk_path,
-                                   **{k: data.get(k) for k in ['rows', 'color', 'case']})
+                                   **v.text_params(data))
 
     buffered = BytesIO()
     img.save(buffered, format="JPEG")
@@ -606,7 +637,7 @@ def preview_text():
 
 @app.route('/plex_proxy/<rating_key>')
 def plex_proxy(rating_key):
-    if not rating_key.isdigit():
+    if not v.is_rating_key(rating_key):
         return 'invalid key', 400
     artist = plex_utils.fetch_artist(rating_key)
     if not artist:
@@ -622,12 +653,10 @@ def plex_proxy(rating_key):
             print(f"plex_proxy blocked unexpected host: {urlparse(thumb_url).hostname}")
             return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
 
-        r = requests.get(thumb_url, headers=plex_utils.plex_headers(), timeout=15)
-        r.raise_for_status()
-        ct = r.headers.get('Content-Type', 'image/jpeg') or 'image/jpeg'
-        if ct.split(';')[0].strip() not in _ALLOWED_IMAGE_TYPES:
-            ct = 'image/jpeg'
-        return send_file(BytesIO(r.content), mimetype=ct)
+        body, ct = v.fetch_bytes(thumb_url, plex_utils.is_plex_url, headers_for=_headers_for, timeout=15)
+        return send_file(BytesIO(body), mimetype=_image_mimetype(ct))
+    except InputError:
+        raise
     except Exception as e:
         print(f"plex_proxy error: {type(e).__name__}")
         return jsonify({'status': 'error', 'message': 'Failed to fetch artist image'}), 500
@@ -636,47 +665,42 @@ def plex_proxy(rating_key):
 def remove_bg():
     if not _REMBG_ENABLED:
         return jsonify({'status': 'error', 'message': 'Background removal not enabled'}), 403
-    data = request.json or {}
+    data = _body()
     data_url = data.get('data_url', '')
-    if not data_url.startswith('data:image'):
+    if not isinstance(data_url, str) or not data_url.startswith('data:image'):
         return jsonify({'status': 'error', 'message': 'Invalid image data'}), 400
-    try:
-        img_bytes = base64.b64decode(data_url.split(',', 1)[1])
-    except Exception:
-        return jsonify({'status': 'error', 'message': 'Could not decode image'}), 400
+    _, img_bytes = v.decode_data_url(data_url)
+    # Reject unreadable / oversized images before spending memory on rembg.
+    logic.open_image(img_bytes, max_pixels=logic.MAX_REMBG_PIXELS).close()
 
     _ALLOWED_REMBG_MODELS = {'u2net', 'u2netp', 'isnet-general-use', 'birefnet-general-lite', 'birefnet-general'}
 
-    method = data.get('method', 'rembg')
+    method = v.choice(data.get('method'), ('rembg', 'color'), 'rembg')
+    interior_threshold = int(v.num(data.get('interior_threshold'), 40, 5, 120))
+    threshold = int(v.num(data.get('threshold'), 30, 1, 150))
+    color = v.hex_color(data.get('color'), '#ffffff')
     try:
         if method == 'rembg':
             import numpy as np
             from PIL import Image as _Img
             from io import BytesIO as _BIO
             from rembg import remove
-            model = data.get('model', 'u2net')
-            if model not in _ALLOWED_REMBG_MODELS:
-                model = 'u2net'
+            model = v.choice(data.get('model'), _ALLOWED_REMBG_MODELS, 'u2net')
             session = _get_rembg_session(model)
             result_bytes = remove(img_bytes, session=session)
 
             # Post-processing
-            if data.get('sharpen_alpha') or data.get('remove_interior'):
+            if v.flag(data.get('sharpen_alpha')) or v.flag(data.get('remove_interior')):
                 arr = np.array(_Img.open(_BIO(result_bytes)).convert('RGBA'))
-                if data.get('remove_interior'):
-                    brightness_threshold = min(max(int(data.get('interior_threshold', 40)), 5), 120)
-                    arr = logic.postprocess_remove_dark_interior(arr, brightness_threshold)
-                if data.get('sharpen_alpha'):
+                if v.flag(data.get('remove_interior')):
+                    arr = logic.postprocess_remove_dark_interior(arr, interior_threshold)
+                if v.flag(data.get('sharpen_alpha')):
                     arr = logic.postprocess_alpha_sharpen(arr)
                 result_bytes = logic._arr_to_png(arr)
         else:
-            color = data.get('color', '#ffffff')
-            if not re.match(r'^#[0-9a-fA-F]{6}$', color):
-                color = '#ffffff'
-            threshold = min(max(int(data.get('threshold', 30)), 1), 150)
             result_bytes = logic.remove_solid_bg(img_bytes, color, threshold)
     except Exception as e:
-        print(f"remove_bg error: {e}")
+        print(f"remove_bg error: {type(e).__name__}")
         return jsonify({'status': 'error', 'message': 'Background removal failed'}), 500
 
     b64 = base64.b64encode(result_bytes).decode()
