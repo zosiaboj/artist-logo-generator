@@ -28,6 +28,9 @@ services:
       - logs:/app/Logs
       - rembg_models:/app/rembg_models
     restart: unless-stopped
+    # tini as PID 1: python/waitress ignore SIGTERM as PID 1, so `docker stop` (and Sablier's
+    # idle stop) otherwise waits 10s and SIGKILLs (exit 137). With init it stops in <1s.
+    init: true
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/healthz', timeout=3)"]
       interval: 30s
