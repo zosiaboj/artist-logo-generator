@@ -3,6 +3,9 @@
 # automatically. Nothing here is required to run the app.
 services:
   plex-artist-logos:
+    # Behind a reverse proxy, don't also publish the app on a host port
+    # (it has no authentication of its own).
+    ports: !reset []
     networks:
       - default
       - proxy
