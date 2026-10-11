@@ -27,6 +27,23 @@ except Exception as e:
     server = None
 
 
+def plex_headers():
+    """Auth header for server-side requests to Plex (keeps the token out of URLs/logs)."""
+    return {'X-Plex-Token': PLEX_TOKEN} if PLEX_TOKEN else {}
+
+
+def _port(u):
+    return u.port or (443 if u.scheme == 'https' else 80)
+
+
+def is_plex_url(url):
+    """True only for URLs on the configured Plex scheme, host *and* port."""
+    if not PLEX_URL:
+        return False
+    a, b = urlparse(url), urlparse(PLEX_URL)
+    return a.scheme == b.scheme and a.hostname == b.hostname and _port(a) == _port(b)
+
+
 def get_library(name):
     return server.library.section(name) if server else None
 
@@ -35,14 +52,38 @@ def fetch_artist(rating_key):
     return server.fetchItem(int(rating_key)) if server else None
 
 
-def get_artist_path(title):
-    # Strip dangerous chars including dots (to block '..') and forward slash
-    clean = re.sub(r'[\\/*?:"<>|.]', "", title).strip().replace('/', '')
+def _clean_title(title):
+    # Strip path-significant chars including dots (blocks '..') and slashes.
+    return re.sub(r'[\\/*?:"<>|.]', "", title).strip().replace('/', '')
+
+
+def get_artist_path(title, rating_key):
+    """Per-artist state dir, keyed on the Plex ratingKey.
+
+    Titles alone are not unique or path-safe: "?" and "..." sanitise to an empty
+    string (resolving to the volume root) and "AC/DC" / "ACDC" collide. The
+    ratingKey makes the name unique and rename-proof; the cleaned title is kept
+    as a readable prefix only. Dirs created by the old title-only scheme are
+    migrated (renamed) on first access.
+    """
+    key = str(int(rating_key))
+    clean = _clean_title(title)[:80].strip()
+    name = f"{clean}-{key}" if clean else key
     base = pathlib.Path(BASE_OUTPUT_DIR).resolve()
-    candidate = (base / clean).resolve()
-    # Ensure the resolved path stays inside BASE_OUTPUT_DIR
-    if not str(candidate).startswith(str(base) + os.sep) and candidate != base:
-        raise ValueError(f"Path traversal attempt blocked for title: {title!r}")
+    candidate = (base / name).resolve()
+    # Must be a strict child of BASE_OUTPUT_DIR, never the root itself.
+    if candidate.parent != base:
+        raise ValueError(f"Unsafe artist path for title: {title!r}")
+
+    if not candidate.exists() and clean:
+        legacy = (base / _clean_title(title)).resolve()
+        if (legacy.parent == base and legacy.is_dir()
+                and ((legacy / 'artist.jpg').exists() or (legacy / '.status').exists())):
+            try:
+                legacy.rename(candidate)
+                print(f"migrated legacy artist dir {legacy.name!r} -> {candidate.name!r}")
+            except OSError as e:
+                print(f"legacy dir migration failed for {legacy.name!r}: {type(e).__name__}")
     return str(candidate)
 
 
@@ -60,13 +101,15 @@ def get_fanart_logos(artist_obj):
             data = res.json()
             return [l['url'] for l in (data.get('hdmusiclogo', []) + data.get('musiclogo', []))]
     except requests.RequestException as e:
-        print(f"get_fanart_logos network error: {e}")
+        print(f"get_fanart_logos network error: {type(e).__name__}")  # not str(e): it embeds the URL incl. api_key
     return []
 
 
 def resource_to_url(val):
     """Convert a Plex resource (string, object, or attribute) to an absolute URL.
 
+    Returned URLs never embed the Plex token (they are sent to the browser and
+    logged). Server-side fetches authenticate via plex_headers() instead.
     Returns None when a usable URL cannot be derived.
     """
     if not val:
@@ -80,7 +123,7 @@ def resource_to_url(val):
         # relative Plex path
         if v.startswith('/') and server:
             try:
-                return server.url(v, includeToken=True)
+                return server.url(v, includeToken=False)
             except Exception:
                 return v
         return v
@@ -88,7 +131,7 @@ def resource_to_url(val):
     # If plexapi resource / object, prefer server.url
     try:
         if server:
-            return server.url(val, includeToken=True)
+            return server.url(val, includeToken=False)
     except Exception:
         pass
 
@@ -102,14 +145,14 @@ def resource_to_url(val):
                 return v
             if server:
                 try:
-                    return server.url(v, includeToken=True)
+                    return server.url(v, includeToken=False)
                 except Exception:
                     return v
             return v
         else:
             try:
                 if server:
-                    return server.url(v, includeToken=True)
+                    return server.url(v, includeToken=False)
             except Exception:
                 try:
                     return str(v)

@@ -97,7 +97,7 @@ def index():
     artists = _get_sorted_artists(force_refresh='refresh' in request.args)
     data = []
     for a in artists:
-        path = plex_utils.get_artist_path(a.title)
+        path = plex_utils.get_artist_path(a.title, a.ratingKey)
         status_file = os.path.join(path, '.status')
         status = 'none'
         if os.path.exists(status_file):
@@ -358,21 +358,22 @@ def proxy_image():
     try:
         normalized = plex_utils.resource_to_url(url)
     except Exception as e:
-        print(f"proxy_image resource_to_url error for {url}: {e}")
+        print(f"proxy_image resource_to_url error: {type(e).__name__}")
         return jsonify({'status': 'error', 'message': 'invalid url'}), 400
 
     if not normalized or not (normalized.startswith('http://') or normalized.startswith('https://')):
         return 'invalid url', 400
 
     parsed = urlparse(normalized)
-    allowed_hosts = _ALLOWED_PROXY_HOSTS | ({plex_utils.PLEX_HOST} if plex_utils.PLEX_HOST else set())
-    if parsed.hostname not in allowed_hosts:
+    is_plex = plex_utils.is_plex_url(normalized)
+    if not is_plex and parsed.hostname not in _ALLOWED_PROXY_HOSTS:
         return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
 
     url = normalized
 
     try:
-        r = requests.get(url, timeout=15)
+        # Plex gets the token as a header (server-side only); external hosts get none.
+        r = requests.get(url, headers=plex_utils.plex_headers() if is_plex else None, timeout=15)
         r.raise_for_status()
         ct = r.headers.get('Content-Type', 'image/jpeg') or 'image/jpeg'
         # Only forward image MIME types — prevents XSS via a malicious upstream Content-Type
@@ -380,7 +381,7 @@ def proxy_image():
             ct = 'image/jpeg'
         return send_file(BytesIO(r.content), mimetype=ct)
     except Exception as e:
-        print(f"proxy_image error fetching {url}: {e}")
+        print(f"proxy_image error fetching {parsed.hostname}{parsed.path}: {type(e).__name__}")
         return jsonify({'status': 'error', 'message': 'Failed to fetch image'}), 502
 
 @app.route('/save', methods=['POST'])
@@ -411,7 +412,7 @@ def save():
         img = logic.Image.open(BytesIO(requests.get(url, timeout=20).content))
     
     final = logic.apply_transforms(img, **{k: data.get(k) for k in ['apply_default_size', 'invert', 'make_white', 'contrast', 'zoom', 'monochrome', 'tint']})
-    path = plex_utils.get_artist_path(artist.title)
+    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
     os.makedirs(path, exist_ok=True)
     final.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
     
@@ -442,7 +443,7 @@ def save_custom():
     cjk_path = get_cjk_font_for_text(artist.title)
     img = logic.generate_text_logo(artist.title, f_path, fallback_font_path=cjk_path,
                                    **{k: data.get(k) for k in ['rows', 'color', 'case']})
-    path = plex_utils.get_artist_path(artist.title)
+    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
     os.makedirs(path, exist_ok=True)
     img.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
     
@@ -455,7 +456,7 @@ def save_custom():
 @app.route('/toggle_status/<rating_key>', methods=['POST'])
 def toggle_status(rating_key):
     artist = plex_utils.fetch_artist(rating_key)
-    path = plex_utils.get_artist_path(artist.title)
+    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
     os.makedirs(path, exist_ok=True)
     status_file = os.path.join(path, '.status')
     
@@ -507,7 +508,7 @@ def bulk_apply_fanart():
                     img = logic.Image.open(BytesIO(requests.get(logo_url, timeout=20).content))
                     final = logic.apply_transforms(img, apply_default_size=True)
 
-                    path = plex_utils.get_artist_path(artist.title)
+                    path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
                     os.makedirs(path, exist_ok=True)
                     final.save(os.path.join(path, "artist.jpg"), "JPEG", quality=95)
 
@@ -536,7 +537,7 @@ def bulk_toggle_status():
     for key in artist_keys:
         try:
             artist = plex_utils.fetch_artist(key)
-            path = plex_utils.get_artist_path(artist.title)
+            path = plex_utils.get_artist_path(artist.title, artist.ratingKey)
             os.makedirs(path, exist_ok=True)
             status_file = os.path.join(path, '.status')
             
@@ -605,19 +606,18 @@ def plex_proxy(rating_key):
             return 'thumb not available', 404
 
         # Validate we only fetch from the configured Plex server (prevents confused-deputy SSRF)
-        parsed = urlparse(thumb_url)
-        if plex_utils.PLEX_HOST and parsed.hostname != plex_utils.PLEX_HOST:
-            print(f"plex_proxy blocked unexpected host: {parsed.hostname}")
+        if not plex_utils.is_plex_url(thumb_url):
+            print(f"plex_proxy blocked unexpected host: {urlparse(thumb_url).hostname}")
             return jsonify({'status': 'error', 'message': 'domain not allowed'}), 403
 
-        r = requests.get(thumb_url, timeout=15)
+        r = requests.get(thumb_url, headers=plex_utils.plex_headers(), timeout=15)
         r.raise_for_status()
         ct = r.headers.get('Content-Type', 'image/jpeg') or 'image/jpeg'
         if ct.split(';')[0].strip() not in _ALLOWED_IMAGE_TYPES:
             ct = 'image/jpeg'
         return send_file(BytesIO(r.content), mimetype=ct)
     except Exception as e:
-        print(f"plex_proxy error: {e}")
+        print(f"plex_proxy error: {type(e).__name__}")
         return jsonify({'status': 'error', 'message': 'Failed to fetch artist image'}), 500
 
 @app.route('/remove_bg', methods=['POST'])
